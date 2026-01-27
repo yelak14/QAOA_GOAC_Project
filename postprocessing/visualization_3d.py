@@ -1,10 +1,19 @@
-"""3D crystal structure visualization for Li configurations."""
+"""3D crystal structure visualization for Li configurations.
 
+Can be run as a standalone script after computation:
+    python postprocessing/visualization_3d.py --results-dir results/simulator/constrained
+    python postprocessing/visualization_3d.py --results-dir results/hardware/standard --top-n 5
+"""
+
+import argparse
+import json
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from pathlib import Path
 
 
 def visualize_configuration(cif_file, occupied_sites, save_path=None,
@@ -90,3 +99,145 @@ def _simple_visualization(occupied_sites, save_path=None, title="Li Site Configu
         plt.close()
     else:
         plt.show()
+
+
+def main():
+    """Standalone entry point: read saved results and generate visualizations."""
+    parser = argparse.ArgumentParser(
+        description="Visualize QAOA results as crystal structure diagrams. "
+                    "Reads results from saved CSV/JSON files produced by runner scripts."
+    )
+    parser.add_argument(
+        '--results-dir', type=str, required=True,
+        help='Path to results directory containing results.json and CSV files'
+    )
+    parser.add_argument(
+        '--cif-file', type=str, default=None,
+        help='Path to CIF/POSCAR file (default: data/input/POSCAR-sc.cif)'
+    )
+    parser.add_argument(
+        '--top-n', type=int, default=3,
+        help='Number of top configurations to visualize (default: 3)'
+    )
+    parser.add_argument(
+        '--output-dir', type=str, default=None,
+        help='Output directory for figures (default: same as results-dir)'
+    )
+    args = parser.parse_args()
+
+    results_dir = Path(args.results_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else results_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine project root for finding CIF file
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parent
+
+    if args.cif_file:
+        cif_file = args.cif_file
+    else:
+        cif_file = str(project_root / "data" / "input" / "POSCAR-sc.cif")
+
+    # --- Load results from JSON ---
+    results_json = results_dir / "results.json"
+    results = None
+    if results_json.exists():
+        with open(results_json) as f:
+            results = json.load(f)
+        print(f"Loaded results from {results_json}")
+
+        # Find best configuration
+        # Simulator format: results_by_p dict
+        if 'results_by_p' in results:
+            best_p = max(results['results_by_p'].keys())
+            best_config = results['results_by_p'][best_p].get('best_config', '')
+        else:
+            # Hardware format: flat dict
+            best_config = results.get('best_config', '')
+
+        if best_config and best_config != 'N/A':
+            occupied = [i for i, b in enumerate(best_config) if b == '1']
+            print(f"Best configuration: {best_config} -> sites {occupied}")
+            save_path = str(output_dir / "best_config_3d.png")
+            visualize_configuration(
+                cif_file, occupied, save_path=save_path,
+                title=f"Best Config: sites {occupied}"
+            )
+            print(f"Saved: {save_path}")
+
+        # Visualize exact ground state
+        ground_state = results.get('ground_state', '')
+        if ground_state:
+            occupied = [i for i, b in enumerate(ground_state) if b == '1']
+            save_path = str(output_dir / "ground_state_3d.png")
+            visualize_configuration(
+                cif_file, occupied, save_path=save_path,
+                title=f"Exact Ground State: sites {occupied}"
+            )
+            print(f"Saved: {save_path}")
+    else:
+        print(f"No results.json found in {results_dir}")
+
+    # --- Load top-N configs from CSV ---
+    csv_files = sorted(results_dir.glob("qaoa_results_p*.csv"))
+    if csv_files:
+        # Use the last (highest p) CSV
+        csv_path = csv_files[-1]
+        print(f"Loading configurations from {csv_path.name}")
+        df = pd.read_csv(csv_path)
+
+        valid_df = df[df['valid'] == True].head(args.top_n)
+        for rank, (_, row) in enumerate(valid_df.iterrows(), start=1):
+            bs = row['bitstring']
+            occupied = [i for i, b in enumerate(bs) if b == '1']
+            energy = row['energy']
+            site_str = '_'.join(map(str, occupied))
+            save_name = f"config_rank{rank}_sites{site_str}.png"
+            save_path = str(output_dir / save_name)
+            visualize_configuration(
+                cif_file, occupied, save_path=save_path,
+                title=f"Rank {rank}: sites {occupied}, E={energy:.4f} eV"
+            )
+            print(f"Saved: {save_path}")
+    else:
+        print("No qaoa_results_p*.csv files found. Skipping top-N visualization.")
+
+    # --- Visualize from compare_with_exact CSV ---
+    compare_csv = results_dir / "compare_with_exact.csv"
+    if compare_csv.exists():
+        comp_df = pd.read_csv(compare_csv)
+        if not comp_df.empty:
+            gs = comp_df.iloc[0].get('ground_state', '')
+            if gs and gs != 'N/A':
+                occupied = [i for i, b in enumerate(gs) if b == '1']
+                gs_prob = comp_df.iloc[0].get('ground_state_probability', 0)
+                approx_ratio = comp_df.iloc[0].get('approximation_ratio', 0)
+                save_path = str(output_dir / "exact_comparison_3d.png")
+                visualize_configuration(
+                    cif_file, occupied, save_path=save_path,
+                    title=f"Ground State (prob={gs_prob:.3f}, r={approx_ratio:.3f})"
+                )
+                print(f"Saved: {save_path}")
+
+    # --- Visualize top-5 from top_5_configs CSV ---
+    top5_csv = results_dir / "top_5_configs.csv"
+    if top5_csv.exists():
+        top5_df = pd.read_csv(top5_csv)
+        for rank, (_, row) in enumerate(top5_df.iterrows(), start=1):
+            bs = row['bitstring']
+            occupied = [i for i, b in enumerate(bs) if b == '1']
+            energy = row['energy']
+            prob = row['probability']
+            save_name = f"top5_rank{rank}.png"
+            save_path = str(output_dir / save_name)
+            visualize_configuration(
+                cif_file, occupied, save_path=save_path,
+                title=f"Top-5 #{rank}: sites {occupied}, E={energy:.4f} eV, p={prob:.3f}"
+            )
+            print(f"Saved: {save_path}")
+
+    print("\nVisualization complete.")
+
+
+if __name__ == "__main__":
+    main()

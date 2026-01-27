@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 from qaoa.utils import load_coefficients, is_valid_config
 from qaoa.hamiltonian import build_cost_hamiltonian, evaluate_energy, get_exact_solution
 from qaoa.circuit import build_qaoa_circuit
-from qaoa.optimizer import run_optimization
+from qaoa.optimizer import run_optimization, cvar_cost_function
 
 
 def main():
@@ -36,6 +36,7 @@ def main():
     ground_state, ground_energy, all_energies = get_exact_solution(
         alpha, beta, E_const, n_particles, n_qubits
     )
+    max_energy = max(all_energies.values())
     print(f"Ground state: {ground_state} (sites {[i for i, b in enumerate(ground_state) if b == '1']})")
     print(f"Ground energy: {ground_energy:.6f} eV")
 
@@ -96,6 +97,34 @@ def main():
             'best_prob': best_prob
         }
 
+    # --- Parameter landscape scan (p=1) ---
+    print("\nComputing parameter landscape (p=1)...")
+    from qiskit_aer import AerSimulator
+    from qiskit import transpile as qk_transpile
+
+    n_grid = 15
+    gamma_range = np.linspace(0, 2 * np.pi, n_grid)
+    beta_scan_range = np.linspace(0, np.pi, n_grid)
+    cost_landscape = np.zeros((n_grid, n_grid))
+
+    circuit_p1, gammas_p1, betas_p1 = build_qaoa_circuit(
+        hamiltonian, mixer_type='xy', p=1,
+        n_qubits=n_qubits, n_particles=n_particles
+    )
+    sim_backend = AerSimulator()
+
+    for gi, g_val in enumerate(gamma_range):
+        for bi, b_val in enumerate(beta_scan_range):
+            pdict = {gammas_p1[0]: g_val, betas_p1[0]: b_val}
+            bound = circuit_p1.assign_parameters(pdict)
+            t_circ = qk_transpile(bound, sim_backend)
+            job = sim_backend.run(t_circ, shots=1024)
+            c = job.result().get_counts()
+            cost_landscape[gi, bi] = cvar_cost_function(
+                c, alpha, beta, E_const, cvar_alpha=0.2
+            )
+    print("Parameter landscape computed.")
+
     # Save results
     output_dir = project_root / "results" / "simulator" / "constrained"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -123,6 +152,12 @@ def main():
     print(f"\nResults saved to {output_dir / 'results.json'}")
 
     # --- Save CSV files ---
+    from postprocessing.analysis import analyze_results, compute_approximation_ratio, compare_with_exact
+
+    best_p = max(results_by_p.keys())
+    final_counts = results_by_p[best_p]['result']['optimal_counts']
+    total_shots = sum(final_counts.values())
+
     # 1. Brute-force enumeration
     bf_rows = [{'bitstring': bs, 'energy_eV': e,
                 'sites': str([i for i, b in enumerate(bs) if b == '1'])}
@@ -137,16 +172,12 @@ def main():
         })
         conv_df.to_csv(output_dir / f"convergence_p{p}.csv", index=False)
 
-    # 3. QAOA results analysis for each p
-    from postprocessing.analysis import analyze_results
+    # 3. QAOA results analysis for each p (uses analyze_results)
     for p, res in results_by_p.items():
         df = analyze_results(res['result']['optimal_counts'], alpha, beta, E_const)
         df.to_csv(output_dir / f"qaoa_results_p{p}.csv", index=False)
 
     # 4. Brute-force comparison data (for best p)
-    best_p = max(results_by_p.keys())
-    final_counts = results_by_p[best_p]['result']['optimal_counts']
-    total_shots = sum(final_counts.values())
     comparison_rows = []
     for bs, e in sorted(all_energies.items(), key=lambda x: x[1]):
         bs_qiskit = bs[::-1]
@@ -173,12 +204,71 @@ def main():
     pd.DataFrame({'site': range(n_qubits), 'occupation_probability': occupation}).to_csv(
         output_dir / "site_occupation.csv", index=False)
 
+    # 6. Approximation ratio for each p (uses compute_approximation_ratio)
+    approx_rows = []
+    for p, res in results_by_p.items():
+        ratio = compute_approximation_ratio(res['best_energy'], ground_energy, max_energy)
+        approx_rows.append({
+            'p': p, 'best_energy_eV': res['best_energy'],
+            'exact_ground_energy_eV': ground_energy,
+            'max_energy_eV': max_energy,
+            'approximation_ratio': ratio
+        })
+    pd.DataFrame(approx_rows).to_csv(output_dir / "approximation_ratio.csv", index=False)
+
+    # 7. Compare with exact solution (uses compare_with_exact)
+    comparison = compare_with_exact(final_counts, alpha, beta, E_const, n_particles, n_qubits)
+    comp_summary = {
+        'ground_state': comparison['ground_state'],
+        'ground_energy_eV': comparison['ground_energy'],
+        'qaoa_found_ground': comparison['qaoa_found_ground'],
+        'ground_state_probability': comparison['ground_state_probability'],
+        'valid_fraction': comparison.get('valid_fraction', 0.0),
+        'expected_energy_eV': comparison.get('expected_energy', float('nan')),
+        'approximation_ratio': comparison['approximation_ratio']
+    }
+    pd.DataFrame([comp_summary]).to_csv(output_dir / "compare_with_exact.csv", index=False)
+    if comparison.get('top_5_configs'):
+        pd.DataFrame(comparison['top_5_configs']).to_csv(
+            output_dir / "top_5_configs.csv", index=False)
+
+    # 8. Energy distribution data
+    valid_df_energy = df_final[df_final['valid']].copy()
+    if not valid_df_energy.empty:
+        energy_dist = valid_df_energy.groupby('energy')['probability'].sum().reset_index()
+        energy_dist.columns = ['energy_eV', 'probability']
+        energy_dist.to_csv(output_dir / "energy_distribution.csv", index=False)
+
+    # 9. Config vs energy data
+    config_energy_rows = []
+    for bitstring, count in final_counts.items():
+        bs = bitstring[::-1]
+        energy = evaluate_energy(bs, alpha, beta, E_const)
+        prob = count / total_shots
+        valid = is_valid_config(bs, n_particles)
+        config_energy_rows.append({
+            'bitstring': bs, 'energy_eV': energy,
+            'probability': prob, 'valid': valid
+        })
+    pd.DataFrame(config_energy_rows).to_csv(output_dir / "config_vs_energy.csv", index=False)
+
+    # 10. Parameter landscape data
+    landscape_rows = []
+    for gi, g_val in enumerate(gamma_range):
+        for bi, b_val in enumerate(beta_scan_range):
+            landscape_rows.append({
+                'gamma': g_val, 'beta': b_val,
+                'cost_eV': cost_landscape[gi, bi]
+            })
+    pd.DataFrame(landscape_rows).to_csv(output_dir / "parameter_landscape.csv", index=False)
+
     print("CSV files saved.")
 
     # --- Generate plots ---
     from postprocessing.plots import (plot_convergence, plot_energy_distribution,
                                       plot_site_occupation, plot_brute_force_comparison,
-                                      plot_config_vs_energy)
+                                      plot_config_vs_energy, plot_approximation_ratio_vs_depth,
+                                      plot_parameter_landscape)
 
     for p, res in results_by_p.items():
         plot_convergence(res['result']['history']['costs'],
@@ -199,6 +289,20 @@ def main():
     plot_config_vs_energy(final_counts, alpha, beta, E_const,
                           save_path=str(output_dir / "config_vs_energy.png"),
                           title=f"XY Mixer (p={best_p}) - Config vs Energy")
+
+    # Approximation ratio vs depth
+    plot_approximation_ratio_vs_depth(
+        results_by_p, ground_energy, max_energy,
+        save_path=str(output_dir / "approximation_ratio_vs_depth.png"),
+        title="XY Mixer - Approximation Ratio vs Depth"
+    )
+
+    # Parameter landscape
+    plot_parameter_landscape(
+        cost_landscape, gamma_range, beta_scan_range,
+        save_path=str(output_dir / "parameter_landscape.png"),
+        title="XY Mixer (p=1) - Parameter Landscape"
+    )
 
     print("Plots saved to results/simulator/constrained/")
     print("\n" + "=" * 60)
