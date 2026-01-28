@@ -1,8 +1,8 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 
 
 def plot_convergence(cost_history, save_path=None, title="QAOA Convergence"):
@@ -42,7 +42,8 @@ def plot_energy_distribution(df, save_path=None, title="Energy Distribution"):
         return
 
     # Aggregate by energy (some configs may have same energy)
-    energy_probs = valid_df.groupby('energy')['probability'].sum().reset_index()
+    energy_probs = valid_df.groupby(
+        'energy')['probability'].sum().reset_index()
     energy_probs = energy_probs.sort_values('energy')
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -108,7 +109,7 @@ def plot_site_occupation(df, n_qubits=8, save_path=None, title="Site Occupation 
 
 
 def plot_approximation_ratio_vs_depth(results_by_p, exact_ground_energy, max_energy,
-                                       save_path=None, title="Approximation Ratio vs QAOA Depth"):
+                                      save_path=None, title="Approximation Ratio vs QAOA Depth"):
     """Plot approximation ratio as a function of QAOA depth p.
 
     Args:
@@ -206,9 +207,11 @@ def plot_brute_force_comparison(all_energies, qaoa_counts, alpha, beta, E_const,
     ax2.tick_params(axis='y', labelcolor='coral')
 
     # X-axis labels: show site indices
-    site_labels = [f"{bs}\n{[i for i,b in enumerate(bs) if b=='1']}" for bs in config_labels]
+    site_labels = [
+        f"{bs}\n{[i for i, b in enumerate(bs) if b == '1']}" for bs in config_labels]
     ax1.set_xticks(x)
-    ax1.set_xticklabels(site_labels, rotation=90, fontsize=7, family='monospace')
+    ax1.set_xticklabels(site_labels, rotation=90,
+                        fontsize=7, family='monospace')
 
     ax1.set_title(title)
 
@@ -269,7 +272,8 @@ def plot_config_vs_energy(counts, alpha, beta, E_const, n_particles=2,
 
     # Sort valid by energy
     if valid_bs:
-        sorted_valid = sorted(zip(valid_bs, valid_energies, valid_probs), key=lambda x: x[1])
+        sorted_valid = sorted(
+            zip(valid_bs, valid_energies, valid_probs), key=lambda x: x[1])
         valid_bs, valid_energies, valid_probs = zip(*sorted_valid)
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -319,7 +323,7 @@ def plot_config_vs_energy(counts, alpha, beta, E_const, n_particles=2,
 
 
 def plot_parameter_landscape(cost_values, gamma_range, beta_range,
-                              save_path=None, title="Parameter Landscape"):
+                             save_path=None, title="Parameter Landscape"):
     """Plot 2D heatmap of cost function over gamma-beta space.
 
     Args:
@@ -345,3 +349,109 @@ def plot_parameter_landscape(cost_values, gamma_range, beta_range,
         plt.close()
     else:
         plt.show()
+
+
+def plot_dual_panel_energy_probability(all_energies, qaoa_counts, n_particles=2,
+                                       save_path=None, title=None, mixer_type="XY (Constrained)", p=1):
+    """Plot dual-panel figure: energy above ground (top) and QAOA probability (bottom).
+
+    This creates the exact visualization style with:
+    - Top panel: Bar chart of energy above ground state for all valid configurations
+    - Bottom panel: Bar chart of QAOA sampling probability with uniform baseline
+    - Color gradient from dark red (high prob) to light coral (low prob)
+    - Configurations sorted by energy and labeled with bitstring + site indices
+
+    Args:
+        all_energies: dict {bitstring: energy} from brute-force enumeration
+        qaoa_counts: dict {bitstring: count} from QAOA measurement
+        n_particles: particle number constraint (default 2 for Li2Co8O16)
+        save_path: if provided, save figure to this path
+        title: plot title (auto-generated if None)
+        mixer_type: string describing mixer ("XY (Constrained)" or "X (Standard)")
+        p: QAOA depth
+    """
+    # Sort configurations by energy
+    sorted_configs = sorted(all_energies.items(), key=lambda x: x[1])
+    config_labels = [bs for bs, _ in sorted_configs]
+    ground_energy = sorted_configs[0][1]
+
+    # Compute relative energies (E - E_ground)
+    relative_energies = [e - ground_energy for _, e in sorted_configs]
+
+    # Compute QAOA probabilities for each valid configuration
+    total_shots = sum(qaoa_counts.values())
+    qaoa_probs = []
+    for bs in config_labels:
+        # Convert to Qiskit convention (reversed bitstring)
+        bs_qiskit = bs[::-1]
+        count = qaoa_counts.get(bs_qiskit, 0)
+        qaoa_probs.append(count / total_shots)
+
+    n_configs = len(config_labels)
+    uniform_prob = 1.0 / n_configs  # Baseline for random sampling
+
+    # Create figure with two subplots (shared x-axis)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
+                                   gridspec_kw={'height_ratios': [1, 1.2], 'hspace': 0.05})
+
+    x = np.arange(n_configs)
+
+    # ============ TOP PANEL: Energy above ground ============
+    # Color bars by energy (darker blue for lower energy)
+    energy_colors = plt.cm.Blues(np.linspace(0.3, 0.7, n_configs))
+    ax1.bar(x, relative_energies, color=energy_colors,
+            edgecolor='none', alpha=0.8)
+
+    ax1.set_ylabel('Energy above ground (eV)', fontsize=11)
+    ax1.set_ylim(bottom=0)
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Title
+    if title is None:
+        title = f"{mixer_type} Mixer (p={p}) - All Valid Configurations"
+    ax1.set_title(title, fontsize=13, fontweight='bold')
+
+    # ============ BOTTOM PANEL: QAOA Probability ============
+    # Create color gradient based on probability (dark red = high, light coral = low)
+    max_prob = max(qaoa_probs) if max(qaoa_probs) > 0 else 1
+    prob_normalized = [prob / max_prob for prob in qaoa_probs]
+
+    # Custom colormap: light coral to dark red
+    colors = []
+    for pn in prob_normalized:
+        # Interpolate between light coral (1.0, 0.6, 0.6) and dark red (0.5, 0.0, 0.0)
+        r = 1.0 - 0.5 * pn
+        g = 0.6 - 0.6 * pn
+        b = 0.5 - 0.5 * pn
+        colors.append((r, g, b))
+
+    ax2.bar(x, qaoa_probs, color=colors, edgecolor='none', alpha=0.9)
+
+    # Add uniform probability baseline
+    ax2.axhline(y=uniform_prob, color='coral',
+                linestyle=':', linewidth=1.5, alpha=0.8)
+    ax2.text(n_configs - 1, uniform_prob + 0.005, f'Uniform (1/{n_configs}={uniform_prob:.4f})',
+             ha='right', va='bottom', fontsize=9, color='coral')
+
+    ax2.set_ylabel('QAOA Probability', fontsize=11)
+    ax2.set_xlabel('Configuration', fontsize=11)
+    ax2.set_ylim(bottom=0)
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    # X-axis labels: bitstring + site indices
+    site_labels = [
+        f"{bs}\n{[i for i, b in enumerate(bs) if b == '1']}" for bs in config_labels]
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(site_labels, rotation=90,
+                        fontsize=7, family='monospace')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Figure saved to: {save_path}")
+    else:
+        plt.show()
+
+    return fig

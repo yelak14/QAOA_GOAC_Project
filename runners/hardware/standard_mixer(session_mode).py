@@ -1,5 +1,12 @@
 """QAOA with standard mixer on IBM Quantum hardware."""
 
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2, Session
+from qiskit import transpile
+from qaoa.optimizer import cvar_cost_function
+from qaoa.circuit import build_qaoa_circuit
+from qaoa.hamiltonian import build_cost_hamiltonian, evaluate_energy, get_exact_solution
+from qaoa.utils import load_coefficients, is_valid_config
 import sys
 import json
 import numpy as np
@@ -9,15 +16,6 @@ from pathlib import Path
 # Add project root to path
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
-
-from qaoa.utils import load_coefficients, is_valid_config
-from qaoa.hamiltonian import build_cost_hamiltonian, evaluate_energy, get_exact_solution
-from qaoa.circuit import build_qaoa_circuit
-from qaoa.optimizer import cvar_cost_function
-
-from qiskit import transpile
-from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2, Session
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
 
 def main():
@@ -91,7 +89,8 @@ def main():
         # Extract counts from SamplerV2 result
         counts = result[0].data.meas.get_counts()
 
-        cost = cvar_cost_function(counts, alpha, beta_coeff, E_const, cvar_alpha=0.2)
+        cost = cvar_cost_function(
+            counts, alpha, beta_coeff, E_const, cvar_alpha=0.2)
         history['costs'].append(cost)
         history['params'].append(params.tolist())
         print(f"  Eval {len(history['costs'])}: cost = {cost:.6f}")
@@ -119,7 +118,8 @@ def main():
     counts = final_result[0].data.meas.get_counts()
 
     # Analyze
-    valid_counts = {k: v for k, v in counts.items() if is_valid_config(k[::-1], n_particles)}
+    valid_counts = {k: v for k, v in counts.items(
+    ) if is_valid_config(k[::-1], n_particles)}
     total = sum(counts.values())
     valid_fraction = sum(valid_counts.values()) / total
 
@@ -193,7 +193,8 @@ def main():
     bf_rows = [{'bitstring': bs, 'energy_eV': e,
                 'sites': str([i for i, b in enumerate(bs) if b == '1'])}
                for bs, e in sorted(all_energies.items(), key=lambda x: x[1])]
-    pd.DataFrame(bf_rows).to_csv(output_dir / "brute_force_enumeration.csv", index=False)
+    pd.DataFrame(bf_rows).to_csv(
+        output_dir / "brute_force_enumeration.csv", index=False)
 
     # 2. Convergence history
     conv_df = pd.DataFrame({
@@ -217,7 +218,8 @@ def main():
             'exact_energy_eV': e,
             'qaoa_probability': qaoa_prob
         })
-    pd.DataFrame(comparison_rows).to_csv(output_dir / "brute_force_comparison.csv", index=False)
+    pd.DataFrame(comparison_rows).to_csv(
+        output_dir / "brute_force_comparison.csv", index=False)
 
     # 5. Site occupation data
     df_final = analyze_results(counts, alpha, beta_coeff, E_const, n_particles)
@@ -243,7 +245,8 @@ def main():
     }]).to_csv(output_dir / "approximation_ratio.csv", index=False)
 
     # 7. Compare with exact solution (uses compare_with_exact)
-    comparison = compare_with_exact(counts, alpha, beta_coeff, E_const, n_particles, n_qubits)
+    comparison = compare_with_exact(
+        counts, alpha, beta_coeff, E_const, n_particles, n_qubits)
     comp_summary = {
         'ground_state': comparison['ground_state'],
         'ground_energy_eV': comparison['ground_energy'],
@@ -253,7 +256,8 @@ def main():
         'expected_energy_eV': comparison.get('expected_energy', float('nan')),
         'approximation_ratio': comparison['approximation_ratio']
     }
-    pd.DataFrame([comp_summary]).to_csv(output_dir / "compare_with_exact.csv", index=False)
+    pd.DataFrame([comp_summary]).to_csv(
+        output_dir / "compare_with_exact.csv", index=False)
     if comparison.get('top_5_configs'):
         pd.DataFrame(comparison['top_5_configs']).to_csv(
             output_dir / "top_5_configs.csv", index=False)
@@ -261,7 +265,8 @@ def main():
     # 8. Energy distribution data
     valid_df_energy = df_final[df_final['valid']].copy()
     if not valid_df_energy.empty:
-        energy_dist = valid_df_energy.groupby('energy')['probability'].sum().reset_index()
+        energy_dist = valid_df_energy.groupby(
+            'energy')['probability'].sum().reset_index()
         energy_dist.columns = ['energy_eV', 'probability']
         energy_dist.to_csv(output_dir / "energy_distribution.csv", index=False)
 
@@ -276,7 +281,8 @@ def main():
             'bitstring': bs, 'energy_eV': energy,
             'probability': prob, 'valid': valid
         })
-    pd.DataFrame(config_energy_rows).to_csv(output_dir / "config_vs_energy.csv", index=False)
+    pd.DataFrame(config_energy_rows).to_csv(
+        output_dir / "config_vs_energy.csv", index=False)
 
     # 10. Parameter landscape data
     landscape_rows = []
@@ -286,7 +292,8 @@ def main():
                 'gamma': g_val, 'beta': b_val,
                 'cost_eV': cost_landscape[gi, bi]
             })
-    pd.DataFrame(landscape_rows).to_csv(output_dir / "parameter_landscape.csv", index=False)
+    pd.DataFrame(landscape_rows).to_csv(
+        output_dir / "parameter_landscape.csv", index=False)
 
     print("CSV files saved.")
 
@@ -294,7 +301,7 @@ def main():
     from postprocessing.plots import (plot_convergence, plot_energy_distribution,
                                       plot_site_occupation, plot_brute_force_comparison,
                                       plot_config_vs_energy, plot_approximation_ratio_vs_depth,
-                                      plot_parameter_landscape)
+                                      plot_parameter_landscape, plot_dual_panel_energy_probability)
 
     # Convergence
     plot_convergence(history['costs'],
@@ -312,13 +319,33 @@ def main():
 
     # Brute-force comparison
     plot_brute_force_comparison(all_energies, counts, alpha, beta_coeff, E_const,
-                                save_path=str(output_dir / "brute_force_comparison.png"),
+                                save_path=str(
+                                    output_dir / "brute_force_comparison.png"),
                                 title=f"Standard Mixer (p={p}, Hardware) vs Brute-Force")
 
     # Config vs energy
     plot_config_vs_energy(counts, alpha, beta_coeff, E_const,
                           save_path=str(output_dir / "config_vs_energy.png"),
                           title=f"Standard Mixer (p={p}, Hardware) - Config vs Energy")
+
+    # Dual-panel energy/probability plots for each p
+    for p, res in results_by_p.items():
+        plot_dual_panel_energy_probability(
+            all_energies,
+            res['result']['optimal_counts'],
+            mixer_type="X (Standard)",
+            p=p,
+            save_path=str(output_dir / f"all_configurations_energy_p{p}.png")
+        )
+
+    # Also save combined version (using best p)
+    plot_dual_panel_energy_probability(
+        all_energies,
+        final_counts,
+        mixer_type="X (Standard)",
+        p=best_p,
+        save_path=str(output_dir / "all_configurations_energy.png")
+    )
 
     # Approximation ratio vs depth
     plot_approximation_ratio_vs_depth(
