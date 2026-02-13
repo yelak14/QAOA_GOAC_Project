@@ -3,7 +3,7 @@
 ENHANCED FEATURES:
 1) Save all plot data as CSV for OriginLab
 2) Plot and save expected_N vs iterations
-3) Bitstring probability plot
+3) Brute force comparison
 4) Parameter landscape visualization
 5) Circuit visualization
 
@@ -11,11 +11,12 @@ Original settings:
 - Aer simulator (shot-based, realistic)
 - COBYLA optimizer (gradient-free, robust to noise)
 - Configurable p and penalty_lambda
+
+Example runner for Li2Co8O16.
 """
 
 import sys
 import json
-import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -23,9 +24,12 @@ from itertools import combinations
 from math import comb
 import time
 
-# Add project root to path
-project_root = Path(__file__).resolve().parent.parent.parent
+# Add project root to path (4 levels up from examples/Li2Co8O16/runners/simulator/)
+project_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
+
+# Example root (2 levels up from runners/simulator/)
+example_root = Path(__file__).resolve().parent.parent
 
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit import Parameter
@@ -257,6 +261,50 @@ def run_qaoa_aer_cobyla_enhanced(alpha, beta_coeff, E_const, penalty_lambda, n_t
     return all_results, alpha_transformed, beta_matrix_transformed, E_const_transformed
 
 
+def compute_brute_force_energies(alpha, beta_coeff, E_const, n_qubits):
+    """Compute energies for ALL 2^n configurations (brute force).
+
+    Returns:
+        dict of {bitstring: (energy, n_particles)}
+    """
+    alpha = np.array(alpha).flatten()
+
+    # Build beta matrix
+    beta_coeff_array = np.array(beta_coeff)
+    beta_matrix = np.zeros((n_qubits, n_qubits))
+
+    if beta_coeff_array.ndim == 2:
+        beta_matrix = beta_coeff_array.copy()
+    elif beta_coeff_array.ndim == 1:
+        idx = 0
+        for i in range(n_qubits):
+            for j in range(i + 1, n_qubits):
+                beta_matrix[i, j] = beta_coeff_array[idx]
+                beta_matrix[j, i] = beta_coeff_array[idx]
+                idx += 1
+
+    all_configs = {}
+
+    for idx in range(2**n_qubits):
+        bitstring = format(idx, f'0{n_qubits}b')
+
+        n_particles = bitstring.count('1')
+
+        energy = E_const
+        for i, bit in enumerate(bitstring):
+            if bit == '1':
+                energy += alpha[i]
+
+        for i in range(n_qubits):
+            for j in range(i + 1, n_qubits):
+                if bitstring[i] == '1' and bitstring[j] == '1':
+                    energy += beta_matrix[i, j]
+
+        all_configs[bitstring] = (energy, n_particles)
+
+    return all_configs
+
+
 def scan_parameter_landscape(alpha_transformed, beta_matrix_transformed, E_const_transformed,
                               n_qubits, p, optimal_params, backend, shots=4096,
                               gamma_range=(-np.pi, np.pi), beta_range=(-np.pi, np.pi),
@@ -314,54 +362,28 @@ def scan_parameter_landscape(alpha_transformed, beta_matrix_transformed, E_const
 
 
 def main():
-    # ===========================================
-    # ARGUMENT PARSING
-    # ===========================================
-    parser = argparse.ArgumentParser(
-        description="Standard QAOA + Penalty (Aer Simulator + COBYLA)"
-    )
-    parser.add_argument('--data-dir', type=str,
-                        default=str(project_root / "data" / "input"),
-                        help='Path to input data directory')
-    parser.add_argument('--n-particles', type=int, default=2,
-                        help='Target particle number')
-    parser.add_argument('--p-value', type=int, default=20,
-                        help='QAOA depth (number of layers)')
-    parser.add_argument('--shots', type=int, default=8192,
-                        help='Shots per evaluation')
-    parser.add_argument('--maxiter', type=int, default=10000,
-                        help='Maximum COBYLA iterations')
-    parser.add_argument('--num-runs', type=int, default=4,
-                        help='Number of different initializations')
-    parser.add_argument('--penalty-lambda', type=float, default=500.0,
-                        help='Penalty strength')
-    parser.add_argument('--output-dir', type=str, default=None,
-                        help='Output directory (default: results/simulator/standard_penalty)')
-    parser.add_argument('--no-landscape', action='store_true',
-                        help='Skip parameter landscape scan')
-    parser.add_argument('--landscape-points', type=int, default=21,
-                        help='Grid resolution for landscape scan')
-    args = parser.parse_args()
-
-    # ===========================================
-    # CONFIGURATION (from args)
-    # ===========================================
-    P_VALUE = args.p_value
-    PENALTY_LAMBDA = args.penalty_lambda
-    N_PARTICLES = args.n_particles
-    SHOTS = args.shots
-    MAXITER = args.maxiter
-    NUM_RUNS = args.num_runs
-    SCAN_LANDSCAPE = not args.no_landscape
-    LANDSCAPE_POINTS = args.landscape_points
-
     print("=" * 70)
     print("Standard QAOA + Penalty (Aer Simulator + COBYLA) - ENHANCED")
-    print("With: CSV export, <N> tracking, bitstring probability, parameter landscape")
+    print("With: CSV export, <N> tracking, brute force, parameter landscape")
     print("=" * 70)
 
+    # ===========================================
+    # CONFIGURATION
+    # ===========================================
+    P_VALUE = 20              # QAOA depth (40 parameters)
+    PENALTY_LAMBDA = 500.0    # Penalty strength
+    N_PARTICLES = 2           # Target particle number
+    SHOTS = 8192              # Shots per evaluation
+    MAXITER = 10000           # COBYLA iterations
+    NUM_RUNS = 4              # Number of different initializations
+
+    # Landscape scan settings
+    SCAN_LANDSCAPE = True
+    LANDSCAPE_POINTS = 21     # Grid resolution for landscape
+    # ===========================================
+
     # Load coefficients
-    data_dir = Path(args.data_dir)
+    data_dir = example_root / "data"
     alpha, beta_coeff, E_const = load_coefficients(str(data_dir))
 
     alpha = np.array(alpha).flatten()
@@ -392,10 +414,7 @@ def main():
         )
 
     # Output directory
-    if args.output_dir is not None:
-        output_dir = Path(args.output_dir)
-    else:
-        output_dir = project_root / "results" / "simulator" / "standard_penalty"
+    output_dir = example_root / "results" / "simulator" / "standard_penalty"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================================
@@ -520,16 +539,107 @@ def main():
     print(f"  Saved: expected_n_vs_iterations.png")
 
     # =========================================================================
-    # 3) BITSTRING PROBABILITY PLOT
+    # 3) BRUTE FORCE COMPARISON
     # =========================================================================
-    # Bitstring probability plot
     print("\n" + "=" * 70)
-    print("Generating bitstring probability plot...")
+    print("3) Computing brute force comparison...")
     print("=" * 70)
-    best_run_idx = np.argmax([res['gs_prob_summed'] for res in all_results])
-    best_distribution = all_results[best_run_idx]['final_distribution']
-    plot_bitstring_probability(best_distribution, N_PARTICLES, ground_state, output_dir)
-    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
+
+    brute_force_configs = compute_brute_force_energies(alpha, beta_coeff, E_const, n_qubits)
+
+    # Sort by energy
+    sorted_configs = sorted(brute_force_configs.items(), key=lambda x: x[1][0])
+
+    # Save brute force data
+    brute_force_df = pd.DataFrame({
+        'bitstring': [cfg[0] for cfg in sorted_configs],
+        'energy_eV': [cfg[1][0] for cfg in sorted_configs],
+        'n_particles': [cfg[1][1] for cfg in sorted_configs],
+        'is_valid': [cfg[1][1] == N_PARTICLES for cfg in sorted_configs]
+    })
+    brute_force_df.to_csv(output_dir / "brute_force_all_configs.csv", index=False)
+
+    # Filter valid configs
+    valid_configs = [(bs, e, n) for bs, (e, n) in sorted_configs if n == N_PARTICLES]
+    valid_configs_df = pd.DataFrame({
+        'bitstring': [cfg[0] for cfg in valid_configs],
+        'energy_eV': [cfg[1] for cfg in valid_configs],
+        'n_particles': [cfg[2] for cfg in valid_configs]
+    })
+    valid_configs_df.to_csv(output_dir / "brute_force_valid_configs.csv", index=False)
+
+    print(f"  Total configurations: {len(sorted_configs)}")
+    print(f"  Valid configurations (N={N_PARTICLES}): {len(valid_configs)}")
+    print(f"  Ground state: {valid_configs[0][0]} with E={valid_configs[0][1]:.4f} eV")
+
+    # Plot: Brute force energy spectrum
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # All configurations
+    all_energies_list = [cfg[1][0] for cfg in sorted_configs]
+    all_n_particles = [cfg[1][1] for cfg in sorted_configs]
+    colors = ['red' if n == N_PARTICLES else 'blue' for n in all_n_particles]
+
+    ax1.scatter(range(len(sorted_configs)), all_energies_list, c=colors, s=10, alpha=0.6)
+    ax1.set_xlabel('Configuration Index (sorted by energy)', fontsize=11)
+    ax1.set_ylabel('Energy (eV)', fontsize=11)
+    ax1.set_title('Brute Force: All Configurations', fontsize=12)
+    ax1.legend(handles=[
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8, label=f'N={N_PARTICLES} (valid)'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=8, label='Other N')
+    ])
+    ax1.grid(True, alpha=0.3)
+
+    # Energy vs N
+    energy_by_n = {}
+    for bs, (e, n) in sorted_configs:
+        if n not in energy_by_n:
+            energy_by_n[n] = []
+        energy_by_n[n].append(e)
+
+    n_values = sorted(energy_by_n.keys())
+    min_energies = [min(energy_by_n[n]) for n in n_values]
+
+    ax2.bar(n_values, min_energies, color='steelblue', edgecolor='black')
+    ax2.axvline(x=N_PARTICLES, color='red', linestyle='--', label=f'Target N={N_PARTICLES}')
+    ax2.set_xlabel('Number of Particles (N)', fontsize=11)
+    ax2.set_ylabel('Minimum Energy (eV)', fontsize=11)
+    ax2.set_title('Minimum Energy vs Particle Number', fontsize=12)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_dir / "brute_force_comparison.png", dpi=150)
+    plt.close()
+    print(f"  Saved: brute_force_comparison.png")
+
+    # Compare QAOA results with brute force
+    print("\n  Comparison with QAOA results:")
+    for run_idx, res in enumerate(all_results):
+        # Get top states from QAOA
+        top_states = sorted(res['final_distribution'].items(), key=lambda x: -x[1])[:5]
+        print(f"\n  Run {run_idx + 1} - Top 5 measured states:")
+        for bs, prob in top_states:
+            bf_energy, bf_n = brute_force_configs[bs]
+            valid_str = "OK" if bf_n == N_PARTICLES else "X"
+            print(f"    {bs}: prob={prob:.4f}, E={bf_energy:.4f} eV, N={bf_n} {valid_str}")
+
+    # Save comparison data
+    comparison_data = []
+    for run_idx, res in enumerate(all_results):
+        for bs, prob in res['final_distribution'].items():
+            bf_energy, bf_n = brute_force_configs[bs]
+            comparison_data.append({
+                'run': run_idx + 1,
+                'bitstring': bs,
+                'qaoa_probability': prob,
+                'brute_force_energy': bf_energy,
+                'n_particles': bf_n,
+                'is_valid': bf_n == N_PARTICLES
+            })
+
+    comparison_df = pd.DataFrame(comparison_data)
+    comparison_df.to_csv(output_dir / "qaoa_vs_brute_force_comparison.csv", index=False)
 
     # =========================================================================
     # 4) PARAMETER LANDSCAPE
@@ -662,6 +772,16 @@ def main():
     print(f"  Saved: professor_style_plots.png")
 
     # =========================================================================
+    # BITSTRING PROBABILITY PLOT (using best run)
+    # =========================================================================
+    best_run_idx = np.argmax([res['gs_prob_summed'] for res in all_results])
+    best_final_distribution = all_results[best_run_idx]['final_distribution']
+
+    # Bitstring probability plot
+    plot_bitstring_probability(best_final_distribution, N_PARTICLES, ground_state, output_dir)
+    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
+
+    # =========================================================================
     # SUMMARY
     # =========================================================================
     print("\n" + "=" * 70)
@@ -722,7 +842,9 @@ def main():
     print("  - run_X_energy_distribution.csv (energy, probability)")
     print("  - run_X_final_distribution.csv (bitstring, probability, n_particles)")
     print("  - run_X_final_params.csv (param_index, param_value)")
-    print("  - bitstring_probability.csv")
+    print("  - brute_force_all_configs.csv")
+    print("  - brute_force_valid_configs.csv")
+    print("  - qaoa_vs_brute_force_comparison.csv")
     print("  - parameter_landscape.csv")
     print("  - parameter_landscape_flat.csv")
 

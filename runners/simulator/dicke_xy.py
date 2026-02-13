@@ -8,13 +8,14 @@ This implements the IMPROVED QAOA algorithm:
 ENHANCED FEATURES:
 1) Save all plot data as CSV for OriginLab
 2) Plot and save expected_N vs iterations
-3) Brute force comparison
-4) Parameter landscape visualization
-5) Circuit visualization
+3) Parameter landscape visualization
+4) Circuit visualization
+5) Bitstring vs probability plot
 """
 
 import sys
 import json
+import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -37,6 +38,7 @@ from qaoa.circuits import (
     create_dicke_initial_state, apply_cost_layer, apply_xy_mixer_layer,
     build_qaoa_circuit, save_circuit_diagram, get_circuit_stats
 )
+from postprocessing.plotting import plot_bitstring_probability
 
 
 def compute_expectation_and_n_from_counts(counts, alpha, beta_matrix, E_const, n_qubits):
@@ -166,7 +168,7 @@ def run_dicke_xy_qaoa(alpha, beta_coeff, E_const, n_target, n_qubits, p,
 
         # Random initial parameters
         np.random.seed(42 + run_idx * 100)
-        x0 = np.random.uniform(0, 2 * np.pi, 2 * p)
+        x0 = np.random.uniform(0, 1.0, 2 * p)
 
         if verbose:
             print(f"Starting COBYLA optimization...")
@@ -263,44 +265,6 @@ def run_dicke_xy_qaoa(alpha, beta_coeff, E_const, n_target, n_qubits, p,
     return all_results, alpha, beta_matrix
 
 
-def compute_brute_force_energies(alpha, beta_coeff, E_const, n_qubits):
-    """Compute energies for ALL 2^n configurations."""
-    alpha = np.array(alpha).flatten()
-
-    beta_coeff_array = np.array(beta_coeff)
-    beta_matrix = np.zeros((n_qubits, n_qubits))
-
-    if beta_coeff_array.ndim == 2:
-        beta_matrix = beta_coeff_array.copy()
-    elif beta_coeff_array.ndim == 1:
-        idx = 0
-        for i in range(n_qubits):
-            for j in range(i + 1, n_qubits):
-                beta_matrix[i, j] = beta_coeff_array[idx]
-                beta_matrix[j, i] = beta_coeff_array[idx]
-                idx += 1
-
-    all_configs = {}
-
-    for idx in range(2**n_qubits):
-        bitstring = format(idx, f'0{n_qubits}b')
-        n_particles = bitstring.count('1')
-
-        energy = E_const
-        for i, bit in enumerate(bitstring):
-            if bit == '1':
-                energy += alpha[i]
-
-        for i in range(n_qubits):
-            for j in range(i + 1, n_qubits):
-                if bitstring[i] == '1' and bitstring[j] == '1':
-                    energy += beta_matrix[i, j]
-
-        all_configs[bitstring] = (energy, n_particles)
-
-    return all_configs
-
-
 def scan_parameter_landscape(alpha, beta_matrix, E_const, n_qubits, n_target, p,
                               optimal_params, backend, shots=4096,
                               gamma_range=(-np.pi, np.pi), beta_range=(-np.pi, np.pi),
@@ -347,28 +311,49 @@ def scan_parameter_landscape(alpha, beta_matrix, E_const, n_qubits, n_target, p,
     }
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Dicke + XY QAOA (Particle-Number Conserving)')
+    parser.add_argument('--data-dir', type=str, default=str(project_root / "data" / "input"),
+                        help='Path to input data directory (alpha, beta, const files)')
+    parser.add_argument('--n-particles', type=int, default=2,
+                        help='Target particle number (default: 2)')
+    parser.add_argument('--p-value', type=int, default=20,
+                        help='QAOA depth (default: 20)')
+    parser.add_argument('--shots', type=int, default=8192,
+                        help='Shots per evaluation (default: 8192)')
+    parser.add_argument('--maxiter', type=int, default=10000,
+                        help='COBYLA max iterations (default: 10000)')
+    parser.add_argument('--num-runs', type=int, default=4,
+                        help='Number of optimization runs (default: 4)')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Output directory (default: results/simulator/dicke_xy)')
+    parser.add_argument('--no-landscape', action='store_true',
+                        help='Skip parameter landscape scan')
+    parser.add_argument('--landscape-points', type=int, default=21,
+                        help='Grid resolution for landscape scan (default: 21)')
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     print("=" * 70)
     print("Particle-Number-Conserving QAOA (Dicke + XY Mixer) - ENHANCED")
     print("=" * 70)
 
-    # ===========================================
-    # CONFIGURATION
-    # ===========================================
-    P_VALUE = 20              # QAOA depth
-    N_PARTICLES = 2           # Target particle number
-    SHOTS = 8192              # Shots per evaluation
-    MAXITER = 10000           # COBYLA iterations
-    NUM_RUNS = 4              # Number of runs
-    USE_FULL_CONNECTIVITY = True  # Full or nearest-neighbor XY mixer
-
-    # Landscape scan settings
-    SCAN_LANDSCAPE = True
-    LANDSCAPE_POINTS = 21
-    # ===========================================
+    # Configuration from args
+    P_VALUE = args.p_value
+    N_PARTICLES = args.n_particles
+    SHOTS = args.shots
+    MAXITER = args.maxiter
+    NUM_RUNS = args.num_runs
+    USE_FULL_CONNECTIVITY = True
+    SCAN_LANDSCAPE = not args.no_landscape
+    LANDSCAPE_POINTS = args.landscape_points
 
     # Load coefficients
-    data_dir = project_root / "data" / "input"
+    data_dir = Path(args.data_dir)
     alpha, beta_coeff, E_const = load_coefficients(str(data_dir))
 
     alpha_arr = np.array(alpha).flatten()
@@ -377,7 +362,7 @@ def main():
     print(f"\nSystem: {n_qubits} qubits, {N_PARTICLES} particles (conserved)")
     print(f"QAOA depth p = {P_VALUE} ({2*P_VALUE} parameters)")
     print(f"Initial state: Dicke state |D_{N_PARTICLES}^{n_qubits}>")
-    print(f"Mixer: XY ({'full connectivity' if USE_FULL_CONNECTIVITY else 'nearest-neighbor'})")
+    print(f"Mixer: XY (full connectivity)")
     print(f"Optimizer: COBYLA")
     print(f"Shots: {SHOTS}")
     print(f"Max iterations: {MAXITER}")
@@ -402,7 +387,10 @@ def main():
     )
 
     # Output directory
-    output_dir = project_root / "results" / "simulator" / "dicke_xy"
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = project_root / "results" / "simulator" / "dicke_xy"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================================
@@ -528,80 +516,16 @@ def main():
     print(f"  Saved: expected_n_vs_iterations.png")
 
     # =========================================================================
-    # 3) BRUTE FORCE COMPARISON
+    # 3) BITSTRING VS PROBABILITY PLOT
     # =========================================================================
     print("\n" + "=" * 70)
-    print("3) Computing brute force comparison...")
+    print("3) Generating bitstring probability plots...")
     print("=" * 70)
 
-    brute_force_configs = compute_brute_force_energies(alpha, beta_coeff, E_const, n_qubits)
-    sorted_configs = sorted(brute_force_configs.items(), key=lambda x: x[1][0])
-
-    # Save brute force data
-    brute_force_df = pd.DataFrame({
-        'bitstring': [cfg[0] for cfg in sorted_configs],
-        'energy_eV': [cfg[1][0] for cfg in sorted_configs],
-        'n_particles': [cfg[1][1] for cfg in sorted_configs],
-        'is_valid': [cfg[1][1] == N_PARTICLES for cfg in sorted_configs]
-    })
-    brute_force_df.to_csv(output_dir / "brute_force_all_configs.csv", index=False)
-
-    valid_configs = [(bs, e, n) for bs, (e, n) in sorted_configs if n == N_PARTICLES]
-    valid_configs_df = pd.DataFrame({
-        'bitstring': [cfg[0] for cfg in valid_configs],
-        'energy_eV': [cfg[1] for cfg in valid_configs]
-    })
-    valid_configs_df.to_csv(output_dir / "brute_force_valid_configs.csv", index=False)
-
-    print(f"  Total configurations: {len(sorted_configs)}")
-    print(f"  Valid configurations (N={N_PARTICLES}): {len(valid_configs)}")
-    print(f"  Ground state: {valid_configs[0][0]} with E={valid_configs[0][1]:.4f} eV")
-
-    # Plot brute force
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Valid configs only (sorted by energy)
-    valid_energies = [cfg[1] for cfg in valid_configs]
-    valid_bitstrings = [cfg[0] for cfg in valid_configs]
-
-    ax1.bar(range(len(valid_energies)), valid_energies, color='steelblue', edgecolor='black')
-    ax1.set_xlabel('Configuration Index', fontsize=11)
-    ax1.set_ylabel('Energy (eV)', fontsize=11)
-    ax1.set_title(f'Valid Configurations (N={N_PARTICLES}) - Sorted by Energy', fontsize=12)
-    ax1.axhline(y=ground_energy, color='r', linestyle='--', label=f'Ground E={ground_energy:.2f}')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # Energy histogram of valid configs
-    ax2.hist(valid_energies, bins=20, color='steelblue', edgecolor='black')
-    ax2.axvline(x=ground_energy, color='r', linestyle='--', label=f'Ground E={ground_energy:.2f}')
-    ax2.set_xlabel('Energy (eV)', fontsize=11)
-    ax2.set_ylabel('Count', fontsize=11)
-    ax2.set_title('Energy Distribution of Valid Configurations', fontsize=12)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "brute_force_comparison.png", dpi=150)
-    plt.close()
-    print(f"  Saved: brute_force_comparison.png")
-
-    # QAOA vs brute force comparison
-    comparison_data = []
-    for run_idx, res in enumerate(all_results):
-        for bs, prob in res['final_distribution'].items():
-            bf_energy, bf_n = brute_force_configs[bs]
-            comparison_data.append({
-                'run': run_idx + 1,
-                'bitstring': bs,
-                'qaoa_probability': prob,
-                'brute_force_energy': bf_energy,
-                'n_particles': bf_n,
-                'is_valid': bf_n == N_PARTICLES
-            })
-
-    comparison_df = pd.DataFrame(comparison_data)
-    comparison_df.to_csv(output_dir / "qaoa_vs_brute_force_comparison.csv", index=False)
+    best_run_idx = np.argmax([res['gs_prob_summed'] for res in all_results])
+    best_distribution = all_results[best_run_idx]['final_distribution']
+    plot_bitstring_probability(best_distribution, N_PARTICLES, ground_state, output_dir)
+    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     # =========================================================================
     # 4) PARAMETER LANDSCAPE
@@ -612,7 +536,6 @@ def main():
         print("=" * 70)
 
         backend = AerSimulator()
-        best_run_idx = np.argmax([res['gs_prob_summed'] for res in all_results])
         best_params = np.array(all_results[best_run_idx]['final_params'])
 
         print(f"  Using parameters from Run {best_run_idx + 1} (best GS probability)")
@@ -795,9 +718,7 @@ def main():
     print("  - run_X_energy_distribution.csv")
     print("  - run_X_final_distribution.csv")
     print("  - run_X_final_params.csv")
-    print("  - brute_force_all_configs.csv")
-    print("  - brute_force_valid_configs.csv")
-    print("  - qaoa_vs_brute_force_comparison.csv")
+    print("  - bitstring_probability.csv")
     print("  - parameter_landscape.csv")
     print("  - parameter_landscape_flat.csv")
 

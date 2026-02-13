@@ -1,12 +1,10 @@
 # QAOA-GOAC Project
 
-Quantum Approximate Optimization Algorithm for Li₂Co₈O₁₆ cathode material configuration optimization.
+Quantum Approximate Optimization Algorithm for crystal structure configuration optimization using the Generalized Occupation-based Atomic Cluster (GOAC) framework.
 
-## System
-- **Material**: Li₂Co₈O₁₆ (75% delithiated LiCoO₂)
-- **Problem**: Find optimal placement of 2 Li atoms in 8 possible sites
-- **Qubits**: 8
-- **Valid Configurations**: 28
+## Overview
+
+This project implements QAOA for finding optimal atomic configurations in crystal materials. The code is general-purpose and can be applied to any system described by GOAC coefficients (on-site energies, pairwise interactions, and a constant offset).
 
 ## Quick Start
 
@@ -16,11 +14,11 @@ python -m venv venv
 source venv/bin/activate  # or .\venv\Scripts\Activate.ps1 on Windows
 pip install -r requirements.txt
 
-# Run simulator (recommended: Dicke + XY)
-python -m runners.simulator.dicke_xy
+# Run with your own data
+python -m runners.simulator.dicke_xy --data-dir data/input --n-particles 2 --p-value 20
 
-# Run hardware (requires IBM Quantum account)
-python -m runners.hardware.dicke_xy
+# Run the Li2Co8O16 example
+python -m examples.Li2Co8O16.runners.simulator.dicke_xy
 ```
 
 ## Methods
@@ -33,9 +31,35 @@ python -m runners.hardware.dicke_xy
 
 ### Method Comparison
 
-- **Standard + Penalty**: Uses penalty term λ(N-2)² to discourage invalid configurations. Simple but may sample invalid states.
-- **Dicke + XY (Recommended)**: Initializes in Dicke state |D₂⁸⟩ and uses XY mixer that preserves particle number. Always produces valid configurations with exactly 2 particles.
+- **Standard + Penalty**: Uses penalty term lambda(N-k)^2 to discourage invalid configurations. Simple but may sample invalid states.
+- **Dicke + XY (Recommended)**: Initializes in Dicke state and uses XY mixer that preserves particle number. Always produces valid configurations.
 - **Multi-start**: Runs multiple short optimizations then fine-tunes the best. More robust convergence.
+
+## Command-Line Arguments
+
+All runners accept command-line arguments for configuration:
+
+```bash
+# Simulator runners
+python -m runners.simulator.dicke_xy \
+    --data-dir path/to/data \
+    --n-particles 2 \
+    --p-value 20 \
+    --shots 8192 \
+    --maxiter 10000 \
+    --num-runs 4 \
+    --output-dir results/my_run
+
+# Hardware runners (additional options)
+python -m runners.hardware.dicke_xy \
+    --data-dir path/to/data \
+    --n-particles 2 \
+    --p-value 5 \
+    --shots 4096 \
+    --backend ibm_brisbane \
+    --optimization-level 3 \
+    --resilience-level 1
+```
 
 ## Running on IBM Quantum Hardware
 
@@ -47,7 +71,7 @@ QiskitRuntimeService.save_account(channel="ibm_quantum", token="YOUR_TOKEN")
 ```
 3. Run hardware scripts:
 ```bash
-python -m runners.hardware.dicke_xy
+python -m runners.hardware.dicke_xy --data-dir data/input --n-particles 2
 ```
 
 ## Postprocessing
@@ -66,43 +90,75 @@ python -m postprocessing.publication_figures
 python -m postprocessing.analyze_results
 ```
 
+## Examples
+
+### Li2Co8O16
+
+The `examples/Li2Co8O16/` directory contains a complete example for the Li2Co8O16 cathode material system (8 qubits, 2 particles, 28 valid configurations). This example includes brute force comparison, which is feasible for this small system.
+
+```bash
+python -m examples.Li2Co8O16.runners.simulator.dicke_xy
+```
+
+See `examples/Li2Co8O16/README.md` for details.
+
+## Using Your Own System
+
+1. Prepare your GOAC coefficient files:
+   - `alpha`: On-site energies (one per line)
+   - `beta`: Pairwise interactions (upper triangle or full matrix)
+   - `const`: Constant energy offset
+2. Place them in a directory (e.g., `data/input/`)
+3. Run with appropriate parameters:
+```bash
+python -m runners.simulator.dicke_xy \
+    --data-dir data/input \
+    --n-particles <your_particle_count> \
+    --p-value 20
+```
+
 ## Project Structure
 
 ```
 QAOA_GOAC_Project/
-├── data/input/                    # GOAC coefficients
-│   ├── alpha                      # On-site energies
-│   ├── beta                       # Interaction energies
-│   └── const                      # Constant energy term
-├── qaoa/                          # Core QAOA modules
+├── data/                          # User's input data directory
+│   └── README.md                  # Instructions for input format
+├── qaoa/                          # Core QAOA module
 │   ├── __init__.py
-│   ├── hamiltonian.py             # Hamiltonian construction
-│   ├── circuits.py                # Shared circuit functions
-│   ├── utils.py                   # Utility functions
-│   └── ...
-├── runners/
-│   ├── simulator/                 # Aer simulator runners
-│   │   ├── standard_penalty.py    # Standard QAOA + Penalty
-│   │   ├── dicke_xy.py            # Dicke + XY QAOA
-│   │   └── dicke_xy_multistart.py # Multi-start optimization
-│   └── hardware/                  # IBM Quantum runners
-│       ├── standard_penalty.py
-│       ├── dicke_xy.py
-│       └── dicke_xy_multistart.py
-├── postprocessing/                # Analysis tools
-│   ├── compare_methods.py         # Compare Standard vs Dicke
-│   ├── compare_hardware_sim.py    # Compare hardware vs simulator
-│   ├── publication_figures.py     # Paper-ready figures
-│   └── analyze_results.py         # Statistical analysis
-├── results/                       # Auto-generated outputs
+│   ├── hamiltonian.py
+│   ├── circuits.py
+│   ├── mixers.py
+│   ├── utils.py
+│   └── brute_force.py             # Optional brute force utility
+├── runners/                       # Generalized runner scripts
 │   ├── simulator/
-│   │   ├── standard_penalty/
-│   │   ├── dicke_xy/
-│   │   └── dicke_xy_multistart/
+│   │   ├── dicke_xy.py
+│   │   ├── dicke_xy_multistart.py
+│   │   └── standard_penalty.py
 │   └── hardware/
+│       ├── dicke_xy.py
+│       ├── dicke_xy_multistart.py
+│       └── standard_penalty.py
+├── postprocessing/                # Analysis and visualization
+│   ├── __init__.py
+│   ├── plotting.py                # Reusable plots (bitstring vs probability)
+│   ├── plots.py                   # Additional plot functions
+│   ├── analysis.py
+│   ├── analyze_results.py
+│   ├── compare_methods.py
+│   ├── compare_hardware_sim.py
+│   ├── publication_figures.py
+│   └── visualization_3d.py
+├── examples/
+│   └── Li2Co8O16/
+│       ├── README.md
+│       ├── data/                   # alpha, beta, const, CIF
+│       ├── runners/                # Hardcoded for this system, includes brute force
+│       └── results/                # Pre-computed results
+├── results/                       # Output directory for user runs
+├── requirements.txt
 ├── PROJECT_SPECIFICATION.md
-├── README.md
-└── requirements.txt
+└── README.md
 ```
 
 ## Output Files
@@ -112,14 +168,9 @@ Each runner generates:
 - `run_X_convergence.csv` - Energy vs iteration data
 - `run_X_energy_distribution.csv` - Final energy distribution
 - `run_X_final_distribution.csv` - Final state probabilities
-- `brute_force_*.csv` - Reference classical solutions
+- `bitstring_probability.csv` - Bitstring vs probability data
+- `bitstring_probability.png` - Bitstring probability bar chart
 - `*.png` - Visualization plots
-
-## For Different Systems
-
-1. Replace files in `data/input/` (alpha, beta, const)
-2. Update `N_PARTICLES` in runner script to match your system
-3. Run!
 
 ## References
 

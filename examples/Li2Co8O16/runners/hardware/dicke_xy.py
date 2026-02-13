@@ -1,4 +1,4 @@
-"""Standard QAOA with Penalty on IBM Quantum Hardware.
+"""Dicke + XY QAOA on IBM Quantum Hardware.
 
 Features:
 - IBM Quantum credential handling (qiskit-ibm-runtime)
@@ -11,7 +11,6 @@ Features:
 
 import sys
 import json
-import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -20,7 +19,8 @@ from math import comb
 import time
 
 # Add project root to path
-project_root = Path(__file__).resolve().parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent
+example_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from qiskit import QuantumCircuit, transpile
@@ -31,42 +31,28 @@ from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qaoa.hamiltonian import evaluate_energy, get_exact_solution
 from qaoa.utils import load_coefficients, is_valid_config
 from qaoa.circuits import (
-    create_hadamard_initial_state, apply_cost_layer, apply_x_mixer_layer,
+    create_dicke_initial_state, apply_cost_layer, apply_xy_mixer_layer,
     build_qaoa_circuit, save_circuit_diagram, get_circuit_stats
 )
 from postprocessing.plotting import plot_bitstring_probability
 
 
-def parse_args():
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Standard QAOA + Penalty on IBM Quantum Hardware"
-    )
-    parser.add_argument("--data-dir", type=str,
-                        default=str(project_root / "data" / "input"),
-                        help="Path to input data directory")
-    parser.add_argument("--n-particles", type=int, default=2,
-                        help="Target particle number")
-    parser.add_argument("--p-value", type=int, default=5,
-                        help="QAOA circuit depth")
-    parser.add_argument("--shots", type=int, default=4096,
-                        help="Shots per circuit")
-    parser.add_argument("--maxiter", type=int, default=100,
-                        help="Maximum optimizer iterations")
-    parser.add_argument("--penalty-lambda", type=float, default=500.0,
-                        help="Penalty strength")
-    parser.add_argument("--output-dir", type=str, default=None,
-                        help="Output directory (default: results/hardware/standard_penalty)")
-    parser.add_argument("--backend", type=str, default="ibm_brisbane",
-                        help="IBM Quantum backend name")
-    parser.add_argument("--optimization-level", type=int, default=3,
-                        help="Transpiler optimization level (0-3)")
-    parser.add_argument("--resilience-level", type=int, default=1,
-                        help="Error mitigation resilience level (0-2)")
-    return parser.parse_args()
+# ===========================================
+# CONFIGURATION
+# ===========================================
+P_VALUE = 5               # Lower depth for hardware (noise)
+N_PARTICLES = 2           # Target particle number
+SHOTS = 4096              # Shots per circuit
+MAXITER = 100             # Fewer iterations for hardware
+
+# IBM Quantum settings
+BACKEND_NAME = "ibm_brisbane"  # Or: ibm_kyoto, ibm_osaka
+OPTIMIZATION_LEVEL = 3         # Transpiler optimization (0-3)
+RESILIENCE_LEVEL = 1           # Error mitigation (0-2)
+# ===========================================
 
 
-def setup_ibm_quantum(backend_name):
+def setup_ibm_quantum():
     """Setup IBM Quantum service.
 
     First time setup (run once):
@@ -74,7 +60,7 @@ def setup_ibm_quantum(backend_name):
     >>> QiskitRuntimeService.save_account(channel="ibm_quantum", token="YOUR_TOKEN")
     """
     service = QiskitRuntimeService(channel="ibm_quantum")
-    backend = service.backend(backend_name)
+    backend = service.backend(BACKEND_NAME)
 
     print(f"Connected to IBM Quantum")
     print(f"  Backend: {backend.name}")
@@ -84,19 +70,19 @@ def setup_ibm_quantum(backend_name):
     return service, backend
 
 
-def transpile_for_hardware(qc, backend, optimization_level):
+def transpile_for_hardware(qc, backend):
     """Transpile circuit for hardware topology."""
     pm = generate_preset_pass_manager(
         backend=backend,
-        optimization_level=optimization_level
+        optimization_level=OPTIMIZATION_LEVEL
     )
     return pm.run(qc)
 
 
-def run_circuit_on_hardware(qc, backend, shots, resilience_level):
+def run_circuit_on_hardware(qc, backend, shots):
     """Run circuit on hardware with error mitigation."""
     options = SamplerOptions()
-    options.resilience_level = resilience_level
+    options.resilience_level = RESILIENCE_LEVEL
     options.default_shots = shots
 
     with Session(backend=backend) as session:
@@ -115,9 +101,8 @@ def run_circuit_on_hardware(qc, backend, shots, resilience_level):
     return counts, job.job_id()
 
 
-def compute_expectation_and_n_from_counts(counts, alpha_transformed, beta_matrix_transformed,
-                                           E_const_transformed, n_qubits):
-    """Compute <H'> and <N> from measurement counts."""
+def compute_expectation_and_n_from_counts(counts, alpha, beta_matrix, E_const, n_qubits):
+    """Compute <H> and <N> from measurement counts."""
     total_shots = sum(counts.values())
     expected_energy = 0.0
     expected_n = 0.0
@@ -129,15 +114,15 @@ def compute_expectation_and_n_from_counts(counts, alpha_transformed, beta_matrix
         n_particles = bs.count('1')
         expected_n += prob * n_particles
 
-        energy = E_const_transformed
+        energy = E_const
         for i, bit in enumerate(bs):
             if bit == '1':
-                energy += alpha_transformed[i]
+                energy += alpha[i]
 
         for i in range(n_qubits):
             for j in range(i + 1, n_qubits):
                 if bs[i] == '1' and bs[j] == '1':
-                    energy += beta_matrix_transformed[i, j]
+                    energy += beta_matrix[i, j]
 
         expected_energy += prob * energy
 
@@ -145,24 +130,12 @@ def compute_expectation_and_n_from_counts(counts, alpha_transformed, beta_matrix
 
 
 def main():
-    args = parse_args()
-
-    # Unpack args into local variables
-    P_VALUE = args.p_value
-    PENALTY_LAMBDA = args.penalty_lambda
-    N_PARTICLES = args.n_particles
-    SHOTS = args.shots
-    MAXITER = args.maxiter
-    BACKEND_NAME = args.backend
-    OPTIMIZATION_LEVEL = args.optimization_level
-    RESILIENCE_LEVEL = args.resilience_level
-
     print("=" * 70)
-    print("Standard QAOA + Penalty on IBM Quantum Hardware")
+    print("Dicke + XY QAOA on IBM Quantum Hardware")
     print("=" * 70)
 
     # Load coefficients
-    data_dir = Path(args.data_dir)
+    data_dir = example_root / "data"
     alpha, beta_coeff, E_const = load_coefficients(str(data_dir))
 
     alpha = np.array(alpha).flatten()
@@ -182,14 +155,10 @@ def main():
                 beta_matrix[j, i] = beta_coeff_array[idx]
                 idx += 1
 
-    # Apply penalty transformation
-    alpha_transformed = alpha + PENALTY_LAMBDA * (1 - 2 * N_PARTICLES)
-    beta_matrix_transformed = beta_matrix + 2 * PENALTY_LAMBDA
-    E_const_transformed = E_const + PENALTY_LAMBDA * N_PARTICLES**2
-
-    print(f"\nSystem: {n_qubits} qubits, {N_PARTICLES} particles (target)")
-    print(f"Penalty lambda = {PENALTY_LAMBDA}")
+    print(f"\nSystem: {n_qubits} qubits, {N_PARTICLES} particles (conserved)")
     print(f"QAOA depth p = {P_VALUE} ({2*P_VALUE} parameters)")
+    print(f"Initial state: Dicke state")
+    print(f"Mixer: XY (full connectivity)")
     print(f"Shots: {SHOTS}")
 
     # Get exact ground state
@@ -197,7 +166,7 @@ def main():
         alpha, beta_coeff, E_const, N_PARTICLES, n_qubits
     )
     print(f"\nGround state: {ground_state}")
-    print(f"Ground energy (original): {ground_energy:.4f} eV")
+    print(f"Ground energy: {ground_energy:.4f} eV")
 
     # Setup IBM Quantum
     print("\n" + "=" * 70)
@@ -205,7 +174,7 @@ def main():
     print("=" * 70)
 
     try:
-        service, backend = setup_ibm_quantum(BACKEND_NAME)
+        service, backend = setup_ibm_quantum()
     except Exception as e:
         print(f"Error connecting to IBM Quantum: {e}")
         print("Please run the following to save your credentials:")
@@ -214,10 +183,7 @@ def main():
         return
 
     # Output directory
-    if args.output_dir is not None:
-        output_dir = Path(args.output_dir)
-    else:
-        output_dir = project_root / "results" / "hardware" / "standard_penalty"
+    output_dir = example_root / "results" / "hardware" / "dicke_xy"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Use random parameters for demonstration
@@ -230,13 +196,11 @@ def main():
     print("Building and transpiling circuit...")
     print("=" * 70)
 
-    qc = QuantumCircuit(n_qubits)
-    qc.h(range(n_qubits))
+    qc = create_dicke_initial_state(n_qubits, N_PARTICLES)
 
     for layer in range(P_VALUE):
-        apply_cost_layer(qc, gammas[layer], alpha_transformed,
-                        beta_matrix_transformed, n_qubits)
-        apply_x_mixer_layer(qc, betas[layer], n_qubits)
+        apply_cost_layer(qc, gammas[layer], alpha, beta_matrix, n_qubits)
+        apply_xy_mixer_layer(qc, betas[layer], n_qubits, connectivity='full')
 
     qc.measure_all()
 
@@ -245,7 +209,7 @@ def main():
     print(f"  Before transpilation: depth={stats_before['depth']}, gates={stats_before['total_gates']}")
 
     # Transpile for hardware
-    qc_transpiled = transpile_for_hardware(qc, backend, OPTIMIZATION_LEVEL)
+    qc_transpiled = transpile_for_hardware(qc, backend)
     stats_after = get_circuit_stats(qc_transpiled)
     print(f"  After transpilation: depth={stats_after['depth']}, gates={stats_after['total_gates']}")
 
@@ -263,7 +227,7 @@ def main():
     print("=" * 70)
 
     start_time = time.time()
-    counts, job_id = run_circuit_on_hardware(qc_transpiled, backend, SHOTS, RESILIENCE_LEVEL)
+    counts, job_id = run_circuit_on_hardware(qc_transpiled, backend, SHOTS)
     elapsed_time = time.time() - start_time
 
     print(f"  Completed in {elapsed_time:.1f}s")
@@ -279,22 +243,22 @@ def main():
     # Energy distribution
     energy_dist = {}
     for bs, prob in final_distribution.items():
-        energy = E_const_transformed
+        energy = E_const
         for i, bit in enumerate(bs):
             if bit == '1':
-                energy += alpha_transformed[i]
+                energy += alpha[i]
         for i in range(n_qubits):
             for j in range(i + 1, n_qubits):
                 if bs[i] == '1' and bs[j] == '1':
-                    energy += beta_matrix_transformed[i, j]
+                    energy += beta_matrix[i, j]
 
-        energy_rounded = round(energy, 0)
+        energy_rounded = round(energy, 2)
         if energy_rounded not in energy_dist:
             energy_dist[energy_rounded] = 0.0
         energy_dist[energy_rounded] += prob
 
-    min_energy = min(energy_dist.keys())
-    gs_prob_summed = energy_dist[min_energy]
+    min_energy = min(energy_dist.keys()) if energy_dist else 0
+    gs_prob_summed = energy_dist.get(min_energy, 0)
 
     # Print results
     print("\n" + "=" * 70)
@@ -310,6 +274,10 @@ def main():
         n_p = bs.count('1')
         valid_str = "OK" if n_p == N_PARTICLES else "X"
         print(f"    {bs}: prob={prob:.4f}, N={n_p} {valid_str}")
+
+    # Plot bitstring probability
+    plot_bitstring_probability(final_distribution, N_PARTICLES, ground_state, output_dir)
+    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     # Save results
     print("\n" + "=" * 70)
@@ -327,7 +295,7 @@ def main():
     # Energy distribution
     sorted_energies = sorted(energy_dist.keys())
     energy_dist_df = pd.DataFrame({
-        'energy': sorted_energies,
+        'energy_eV': sorted_energies,
         'probability': [energy_dist[e] for e in sorted_energies]
     })
     energy_dist_df.to_csv(output_dir / "energy_distribution.csv", index=False)
@@ -335,10 +303,9 @@ def main():
     # Summary
     summary = {
         'settings': {
-            'method': 'standard_penalty_hardware',
+            'method': 'dicke_xy_hardware',
             'backend': BACKEND_NAME,
             'p': P_VALUE,
-            'penalty_lambda': PENALTY_LAMBDA,
             'n_particles': N_PARTICLES,
             'shots': SHOTS,
             'optimization_level': OPTIMIZATION_LEVEL,
@@ -365,10 +332,6 @@ def main():
         json.dump(summary, f, indent=2)
 
     print(f"  Saved to: {output_dir}")
-
-    # Bitstring probability plot
-    plot_bitstring_probability(final_distribution, N_PARTICLES, ground_state, output_dir)
-    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     print("\n" + "=" * 70)
     print("DONE")

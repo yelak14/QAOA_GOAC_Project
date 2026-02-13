@@ -1,0 +1,41 @@
+
+#======================================================================
+# CRYSTAL DATA
+#----------------------------------------------------------------------
+data_VESTA_phase_1
+
+_chemical_name_common                  'Li2 Co2 O4'
+_cell_length_a                         5.877100
+_cell_length_b                         5.877100
+_cell_length_c                         9.859925
+_cell_angle_alpha                      90.000000
+_cell_angle_beta                       90.000000
+_cell_angle_gamma                      120.000000
+_cell_volume                           294.937785
+_space_group_name_H-M_alt              'P 1'
+_space_group_IT_number                 1
+
+loop_
+_space_group_symop_operation_xyz
+   'x, y, z'
+   'x, y+1/2, z'
+   'x+1/2, y, z'
+   'x+1/2, y+1/2, z'
+
+loop_
+   _atom_site_label
+   _atom_site_occupancy
+   _atom_site_fract_x
+   _atom_site_fract_y
+   _atom_site_fract_z
+   _atom_site_adp_type
+   _atom_site_U_iso_or_equiv
+   _atom_site_type_symbol
+   Li1        0.25     0.333333     0.166666     0.258208    Uiso  ? Li
+   Li2        0.25     0.166666     0.333333     0.758208    Uiso  ? Li
+   Co1        1.0     0.333333     0.166666     0.000513    Uiso  ? Co
+   Co2        1.0     0.166666     0.333333     0.500513    Uiso  ? Co
+   O1         1.0     0.000000     0.000000     0.886767    Uiso  ? O
+   O2         1.0     0.000000     0.000000     0.386767    Uiso  ? O
+   O3         1.0     0.333333     0.166666     0.613443    Uiso  ? O
+   O4         1.0     0.166666     0.333333     0.113443    Uiso  ? O

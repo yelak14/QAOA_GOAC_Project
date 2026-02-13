@@ -12,6 +12,7 @@ Features:
 
 import sys
 import json
+import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -34,27 +35,59 @@ from qaoa.circuits import (
     create_dicke_initial_state, apply_cost_layer, apply_xy_mixer_layer,
     build_qaoa_circuit, save_circuit_diagram, get_circuit_stats
 )
+from postprocessing.plotting import plot_bitstring_probability
 
 
-# ===========================================
-# CONFIGURATION
-# ===========================================
-P_VALUE = 5               # Lower depth for hardware (noise)
-N_PARTICLES = 2           # Target particle number
-SHOTS = 4096              # Shots per circuit
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Dicke + XY QAOA with Multi-Start on IBM Quantum Hardware"
+    )
+    parser.add_argument(
+        "--data-dir", type=str,
+        default=str(project_root / "data" / "input"),
+        help="Path to input data directory (default: <project_root>/data/input)"
+    )
+    parser.add_argument(
+        "--n-particles", type=int, default=2,
+        help="Target particle number (default: 2)"
+    )
+    parser.add_argument(
+        "--p-value", type=int, default=5,
+        help="QAOA depth p (default: 5)"
+    )
+    parser.add_argument(
+        "--shots", type=int, default=4096,
+        help="Shots per circuit (default: 4096)"
+    )
+    parser.add_argument(
+        "--num-starting-points", type=int, default=5,
+        help="Number of parameter sets to try (default: 5)"
+    )
+    parser.add_argument(
+        "--maxiter", type=int, default=50,
+        help="Iterations per starting point (default: 50)"
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default=None,
+        help="Output directory (default: results/hardware/dicke_xy_multistart)"
+    )
+    parser.add_argument(
+        "--backend", type=str, default="ibm_brisbane",
+        help="IBM Quantum backend name (default: ibm_brisbane)"
+    )
+    parser.add_argument(
+        "--optimization-level", type=int, default=3,
+        help="Transpiler optimization level 0-3 (default: 3)"
+    )
+    parser.add_argument(
+        "--resilience-level", type=int, default=1,
+        help="Error mitigation resilience level 0-2 (default: 1)"
+    )
+    return parser.parse_args()
 
-# Multi-start settings (reduced for hardware)
-NUM_STARTING_POINTS = 5   # Number of parameter sets to try
-MAXITER = 50              # Iterations per starting point
 
-# IBM Quantum settings
-BACKEND_NAME = "ibm_brisbane"  # Or: ibm_kyoto, ibm_osaka
-OPTIMIZATION_LEVEL = 3         # Transpiler optimization (0-3)
-RESILIENCE_LEVEL = 1           # Error mitigation (0-2)
-# ===========================================
-
-
-def setup_ibm_quantum():
+def setup_ibm_quantum(backend_name):
     """Setup IBM Quantum service.
 
     First time setup (run once):
@@ -62,7 +95,7 @@ def setup_ibm_quantum():
     >>> QiskitRuntimeService.save_account(channel="ibm_quantum", token="YOUR_TOKEN")
     """
     service = QiskitRuntimeService(channel="ibm_quantum")
-    backend = service.backend(BACKEND_NAME)
+    backend = service.backend(backend_name)
 
     print(f"Connected to IBM Quantum")
     print(f"  Backend: {backend.name}")
@@ -72,19 +105,19 @@ def setup_ibm_quantum():
     return service, backend
 
 
-def transpile_for_hardware(qc, backend):
+def transpile_for_hardware(qc, backend, optimization_level):
     """Transpile circuit for hardware topology."""
     pm = generate_preset_pass_manager(
         backend=backend,
-        optimization_level=OPTIMIZATION_LEVEL
+        optimization_level=optimization_level
     )
     return pm.run(qc)
 
 
-def run_circuit_on_hardware(qc, backend, shots):
+def run_circuit_on_hardware(qc, backend, shots, resilience_level):
     """Run circuit on hardware with error mitigation."""
     options = SamplerOptions()
-    options.resilience_level = RESILIENCE_LEVEL
+    options.resilience_level = resilience_level
     options.default_shots = shots
 
     with Session(backend=backend) as session:
@@ -131,12 +164,25 @@ def compute_expectation_and_n_from_counts(counts, alpha, beta_matrix, E_const, n
 
 
 def main():
+    args = parse_args()
+
+    # Unpack args into local config variables
+    DATA_DIR = args.data_dir
+    N_PARTICLES = args.n_particles
+    P_VALUE = args.p_value
+    SHOTS = args.shots
+    NUM_STARTING_POINTS = args.num_starting_points
+    MAXITER = args.maxiter
+    BACKEND_NAME = args.backend
+    OPTIMIZATION_LEVEL = args.optimization_level
+    RESILIENCE_LEVEL = args.resilience_level
+
     print("=" * 70)
     print("Dicke + XY QAOA with Multi-Start on IBM Quantum Hardware")
     print("=" * 70)
 
     # Load coefficients
-    data_dir = project_root / "data" / "input"
+    data_dir = Path(DATA_DIR)
     alpha, beta_coeff, E_const = load_coefficients(str(data_dir))
 
     alpha = np.array(alpha).flatten()
@@ -176,7 +222,7 @@ def main():
     print("=" * 70)
 
     try:
-        service, backend = setup_ibm_quantum()
+        service, backend = setup_ibm_quantum(BACKEND_NAME)
     except Exception as e:
         print(f"Error connecting to IBM Quantum: {e}")
         print("Please run the following to save your credentials:")
@@ -185,7 +231,10 @@ def main():
         return
 
     # Output directory
-    output_dir = project_root / "results" / "hardware" / "dicke_xy_multistart"
+    if args.output_dir is not None:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = project_root / "results" / "hardware" / "dicke_xy_multistart"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Multi-start: try different parameter sets
@@ -214,11 +263,11 @@ def main():
         qc.measure_all()
 
         # Transpile
-        qc_transpiled = transpile_for_hardware(qc, backend)
+        qc_transpiled = transpile_for_hardware(qc, backend, OPTIMIZATION_LEVEL)
 
         # Run on hardware
         start_time = time.time()
-        counts, job_id = run_circuit_on_hardware(qc_transpiled, backend, SHOTS)
+        counts, job_id = run_circuit_on_hardware(qc_transpiled, backend, SHOTS, RESILIENCE_LEVEL)
         elapsed_time = time.time() - start_time
 
         # Compute energy
@@ -335,6 +384,7 @@ def main():
             'n_particles': N_PARTICLES,
             'shots': SHOTS,
             'num_starting_points': NUM_STARTING_POINTS,
+            'maxiter': MAXITER,
             'optimization_level': OPTIMIZATION_LEVEL,
             'resilience_level': RESILIENCE_LEVEL
         },
@@ -375,11 +425,15 @@ def main():
 
         save_circuit_diagram(qc, output_dir / "circuit_best_original.png")
 
-        qc_transpiled = transpile_for_hardware(qc, backend)
+        qc_transpiled = transpile_for_hardware(qc, backend, OPTIMIZATION_LEVEL)
         save_circuit_diagram(qc_transpiled, output_dir / "circuit_best_transpiled.png", fold=100)
         print(f"  Saved circuit diagrams")
     except Exception as e:
         print(f"  Warning: Could not save circuit diagrams: {e}")
+
+    # Bitstring probability plot
+    plot_bitstring_probability(final_distribution, N_PARTICLES, ground_state, output_dir)
+    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     print(f"  Saved to: {output_dir}")
 

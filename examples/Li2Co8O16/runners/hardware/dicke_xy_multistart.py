@@ -1,6 +1,7 @@
-"""Dicke + XY QAOA on IBM Quantum Hardware.
+"""Dicke + XY QAOA with Multi-Start on IBM Quantum Hardware.
 
 Features:
+- Multi-start optimization strategy
 - IBM Quantum credential handling (qiskit-ibm-runtime)
 - Error mitigation (resilience level)
 - Transpilation for hardware topology
@@ -11,7 +12,6 @@ Features:
 
 import sys
 import json
-import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -20,7 +20,8 @@ from math import comb
 import time
 
 # Add project root to path
-project_root = Path(__file__).resolve().parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent
+example_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from qiskit import QuantumCircuit, transpile
@@ -37,52 +38,25 @@ from qaoa.circuits import (
 from postprocessing.plotting import plot_bitstring_probability
 
 
-def parse_args():
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Dicke + XY QAOA on IBM Quantum Hardware"
-    )
-    parser.add_argument(
-        "--data-dir", type=str,
-        default=str(project_root / "data" / "input"),
-        help="Path to input data directory (default: <project_root>/data/input)"
-    )
-    parser.add_argument(
-        "--n-particles", type=int, default=2,
-        help="Target particle number (default: 2)"
-    )
-    parser.add_argument(
-        "--p-value", type=int, default=5,
-        help="QAOA depth (default: 5)"
-    )
-    parser.add_argument(
-        "--shots", type=int, default=4096,
-        help="Shots per circuit (default: 4096)"
-    )
-    parser.add_argument(
-        "--maxiter", type=int, default=100,
-        help="Maximum optimizer iterations (default: 100)"
-    )
-    parser.add_argument(
-        "--output-dir", type=str, default=None,
-        help="Output directory (default: <project_root>/results/hardware/dicke_xy)"
-    )
-    parser.add_argument(
-        "--backend", type=str, default="ibm_brisbane",
-        help="IBM Quantum backend name (default: ibm_brisbane)"
-    )
-    parser.add_argument(
-        "--optimization-level", type=int, default=3,
-        help="Transpiler optimization level 0-3 (default: 3)"
-    )
-    parser.add_argument(
-        "--resilience-level", type=int, default=1,
-        help="Error mitigation resilience level 0-2 (default: 1)"
-    )
-    return parser.parse_args()
+# ===========================================
+# CONFIGURATION
+# ===========================================
+P_VALUE = 5               # Lower depth for hardware (noise)
+N_PARTICLES = 2           # Target particle number
+SHOTS = 4096              # Shots per circuit
+
+# Multi-start settings (reduced for hardware)
+NUM_STARTING_POINTS = 5   # Number of parameter sets to try
+MAXITER = 50              # Iterations per starting point
+
+# IBM Quantum settings
+BACKEND_NAME = "ibm_brisbane"  # Or: ibm_kyoto, ibm_osaka
+OPTIMIZATION_LEVEL = 3         # Transpiler optimization (0-3)
+RESILIENCE_LEVEL = 1           # Error mitigation (0-2)
+# ===========================================
 
 
-def setup_ibm_quantum(backend_name):
+def setup_ibm_quantum():
     """Setup IBM Quantum service.
 
     First time setup (run once):
@@ -90,7 +64,7 @@ def setup_ibm_quantum(backend_name):
     >>> QiskitRuntimeService.save_account(channel="ibm_quantum", token="YOUR_TOKEN")
     """
     service = QiskitRuntimeService(channel="ibm_quantum")
-    backend = service.backend(backend_name)
+    backend = service.backend(BACKEND_NAME)
 
     print(f"Connected to IBM Quantum")
     print(f"  Backend: {backend.name}")
@@ -100,27 +74,26 @@ def setup_ibm_quantum(backend_name):
     return service, backend
 
 
-def transpile_for_hardware(qc, backend, optimization_level):
+def transpile_for_hardware(qc, backend):
     """Transpile circuit for hardware topology."""
     pm = generate_preset_pass_manager(
         backend=backend,
-        optimization_level=optimization_level
+        optimization_level=OPTIMIZATION_LEVEL
     )
     return pm.run(qc)
 
 
-def run_circuit_on_hardware(qc, backend, shots, resilience_level):
+def run_circuit_on_hardware(qc, backend, shots):
     """Run circuit on hardware with error mitigation."""
     options = SamplerOptions()
-    options.resilience_level = resilience_level
+    options.resilience_level = RESILIENCE_LEVEL
     options.default_shots = shots
 
     with Session(backend=backend) as session:
         sampler = Sampler(mode=session, options=options)
         job = sampler.run([qc])
 
-        print(f"  Job ID: {job.job_id()}")
-        print(f"  Waiting for results...")
+        print(f"    Job ID: {job.job_id()}")
 
         result = job.result()
 
@@ -160,22 +133,12 @@ def compute_expectation_and_n_from_counts(counts, alpha, beta_matrix, E_const, n
 
 
 def main():
-    args = parse_args()
-
-    P_VALUE = args.p_value
-    N_PARTICLES = args.n_particles
-    SHOTS = args.shots
-    MAXITER = args.maxiter
-    BACKEND_NAME = args.backend
-    OPTIMIZATION_LEVEL = args.optimization_level
-    RESILIENCE_LEVEL = args.resilience_level
-
     print("=" * 70)
-    print("Dicke + XY QAOA on IBM Quantum Hardware")
+    print("Dicke + XY QAOA with Multi-Start on IBM Quantum Hardware")
     print("=" * 70)
 
     # Load coefficients
-    data_dir = Path(args.data_dir)
+    data_dir = example_root / "data"
     alpha, beta_coeff, E_const = load_coefficients(str(data_dir))
 
     alpha = np.array(alpha).flatten()
@@ -199,6 +162,7 @@ def main():
     print(f"QAOA depth p = {P_VALUE} ({2*P_VALUE} parameters)")
     print(f"Initial state: Dicke state")
     print(f"Mixer: XY (full connectivity)")
+    print(f"Multi-start: {NUM_STARTING_POINTS} starting points")
     print(f"Shots: {SHOTS}")
 
     # Get exact ground state
@@ -214,7 +178,7 @@ def main():
     print("=" * 70)
 
     try:
-        service, backend = setup_ibm_quantum(BACKEND_NAME)
+        service, backend = setup_ibm_quantum()
     except Exception as e:
         print(f"Error connecting to IBM Quantum: {e}")
         print("Please run the following to save your credentials:")
@@ -223,65 +187,87 @@ def main():
         return
 
     # Output directory
-    if args.output_dir is not None:
-        output_dir = Path(args.output_dir)
-    else:
-        output_dir = project_root / "results" / "hardware" / "dicke_xy"
+    output_dir = example_root / "results" / "hardware" / "dicke_xy_multistart"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use random parameters for demonstration
-    np.random.seed(42)
-    gammas = np.random.uniform(0, np.pi, P_VALUE)
-    betas = np.random.uniform(0, np.pi, P_VALUE)
-
-    # Build circuit
+    # Multi-start: try different parameter sets
     print("\n" + "=" * 70)
-    print("Building and transpiling circuit...")
+    print(f"Running {NUM_STARTING_POINTS} circuits with different parameters...")
     print("=" * 70)
 
-    qc = create_dicke_initial_state(n_qubits, N_PARTICLES)
+    all_results = []
+    total_start_time = time.time()
 
-    for layer in range(P_VALUE):
-        apply_cost_layer(qc, gammas[layer], alpha, beta_matrix, n_qubits)
-        apply_xy_mixer_layer(qc, betas[layer], n_qubits, connectivity='full')
+    for run_idx in range(NUM_STARTING_POINTS):
+        print(f"\n  Run {run_idx + 1}/{NUM_STARTING_POINTS}:")
 
-    qc.measure_all()
+        # Random parameters
+        np.random.seed(42 + run_idx * 37)
+        gammas = np.random.uniform(0, np.pi, P_VALUE)
+        betas = np.random.uniform(0, np.pi, P_VALUE)
 
-    # Get circuit stats before transpilation
-    stats_before = get_circuit_stats(qc)
-    print(f"  Before transpilation: depth={stats_before['depth']}, gates={stats_before['total_gates']}")
+        # Build circuit
+        qc = create_dicke_initial_state(n_qubits, N_PARTICLES)
 
-    # Transpile for hardware
-    qc_transpiled = transpile_for_hardware(qc, backend, OPTIMIZATION_LEVEL)
-    stats_after = get_circuit_stats(qc_transpiled)
-    print(f"  After transpilation: depth={stats_after['depth']}, gates={stats_after['total_gates']}")
+        for layer in range(P_VALUE):
+            apply_cost_layer(qc, gammas[layer], alpha, beta_matrix, n_qubits)
+            apply_xy_mixer_layer(qc, betas[layer], n_qubits, connectivity='full')
 
-    # Save circuit diagrams
-    try:
-        save_circuit_diagram(qc, output_dir / "circuit_original.png")
-        save_circuit_diagram(qc_transpiled, output_dir / "circuit_transpiled.png", fold=100)
-        print(f"  Saved circuit diagrams")
-    except Exception as e:
-        print(f"  Warning: Could not save circuit diagrams: {e}")
+        qc.measure_all()
 
-    # Run on hardware
+        # Transpile
+        qc_transpiled = transpile_for_hardware(qc, backend)
+
+        # Run on hardware
+        start_time = time.time()
+        counts, job_id = run_circuit_on_hardware(qc_transpiled, backend, SHOTS)
+        elapsed_time = time.time() - start_time
+
+        # Compute energy
+        energy, exp_n = compute_expectation_and_n_from_counts(
+            counts, alpha, beta_matrix, E_const, n_qubits
+        )
+
+        # Valid fraction
+        total_shots_final = sum(counts.values())
+        final_distribution = {bs[::-1]: count/total_shots_final
+                             for bs, count in counts.items()}
+        valid_prob = sum(prob for bs, prob in final_distribution.items()
+                        if is_valid_config(bs, N_PARTICLES))
+
+        all_results.append({
+            'run_idx': run_idx,
+            'gammas': gammas.tolist(),
+            'betas': betas.tolist(),
+            'energy': energy,
+            'valid_fraction': valid_prob,
+            'expected_n': exp_n,
+            'job_id': job_id,
+            'elapsed_time': elapsed_time,
+            'counts': counts
+        })
+
+        print(f"    <H> = {energy:.4f} eV, Valid: {valid_prob:.2%}, Time: {elapsed_time:.1f}s")
+
+    total_time = time.time() - total_start_time
+
+    # Find best result
+    best_idx = np.argmin([r['energy'] for r in all_results])
+    best_result = all_results[best_idx]
+
     print("\n" + "=" * 70)
-    print("Running on IBM Quantum hardware...")
+    print("BEST RESULT")
     print("=" * 70)
+    print(f"  Run: {best_idx + 1}")
+    print(f"  Energy: {best_result['energy']:.4f} eV")
+    print(f"  Valid fraction: {best_result['valid_fraction']:.2%}")
+    print(f"  Total time: {total_time:.1f}s")
 
-    start_time = time.time()
-    counts, job_id = run_circuit_on_hardware(qc_transpiled, backend, SHOTS, RESILIENCE_LEVEL)
-    elapsed_time = time.time() - start_time
-
-    print(f"  Completed in {elapsed_time:.1f}s")
-
-    # Process results
-    total_shots_final = sum(counts.values())
+    # Process best result
+    best_counts = best_result['counts']
+    total_shots_final = sum(best_counts.values())
     final_distribution = {bs[::-1]: count/total_shots_final
-                         for bs, count in counts.items()}
-
-    valid_prob = sum(prob for bs, prob in final_distribution.items()
-                    if is_valid_config(bs, N_PARTICLES))
+                         for bs, count in best_counts.items()}
 
     # Energy distribution
     energy_dist = {}
@@ -303,27 +289,34 @@ def main():
     min_energy = min(energy_dist.keys()) if energy_dist else 0
     gs_prob_summed = energy_dist.get(min_energy, 0)
 
-    # Print results
-    print("\n" + "=" * 70)
-    print("RESULTS")
-    print("=" * 70)
-    print(f"  Valid fraction: {valid_prob:.2%}")
-    print(f"  GS prob (summed): {gs_prob_summed:.4f}")
-
     # Top 10 states
     top_states = sorted(final_distribution.items(), key=lambda x: -x[1])[:10]
-    print("\n  Top 10 measured states:")
+    print("\n  Top 10 measured states (best run):")
     for bs, prob in top_states:
         n_p = bs.count('1')
         valid_str = "OK" if n_p == N_PARTICLES else "X"
         print(f"    {bs}: prob={prob:.4f}, N={n_p} {valid_str}")
+
+    # Plot bitstring probability
+    plot_bitstring_probability(final_distribution, N_PARTICLES, ground_state, output_dir)
+    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     # Save results
     print("\n" + "=" * 70)
     print("Saving results...")
     print("=" * 70)
 
-    # Final distribution
+    # Multi-start summary
+    multistart_df = pd.DataFrame({
+        'run': [r['run_idx'] + 1 for r in all_results],
+        'energy_eV': [r['energy'] for r in all_results],
+        'valid_fraction': [r['valid_fraction'] for r in all_results],
+        'expected_n': [r['expected_n'] for r in all_results],
+        'elapsed_time': [r['elapsed_time'] for r in all_results]
+    })
+    multistart_df.to_csv(output_dir / "multistart_summary.csv", index=False)
+
+    # Final distribution (best run)
     final_dist_df = pd.DataFrame({
         'bitstring': list(final_distribution.keys()),
         'probability': list(final_distribution.values()),
@@ -342,39 +335,59 @@ def main():
     # Summary
     summary = {
         'settings': {
-            'method': 'dicke_xy_hardware',
+            'method': 'dicke_xy_multistart_hardware',
             'backend': BACKEND_NAME,
             'p': P_VALUE,
             'n_particles': N_PARTICLES,
             'shots': SHOTS,
+            'num_starting_points': NUM_STARTING_POINTS,
             'optimization_level': OPTIMIZATION_LEVEL,
             'resilience_level': RESILIENCE_LEVEL
         },
-        'job_id': job_id,
         'ground_state': ground_state,
         'ground_energy': float(ground_energy),
-        'results': {
-            'valid_fraction': valid_prob,
+        'best_result': {
+            'run': best_idx + 1,
+            'energy': best_result['energy'],
+            'valid_fraction': best_result['valid_fraction'],
             'gs_prob_summed': gs_prob_summed,
-            'gs_energy': min_energy,
-            'elapsed_time': elapsed_time
+            'job_id': best_result['job_id']
         },
-        'circuit_stats': {
-            'original_depth': stats_before['depth'],
-            'original_gates': stats_before['total_gates'],
-            'transpiled_depth': stats_after['depth'],
-            'transpiled_gates': stats_after['total_gates']
-        }
+        'all_runs': [
+            {
+                'run': r['run_idx'] + 1,
+                'energy': r['energy'],
+                'valid_fraction': r['valid_fraction'],
+                'job_id': r['job_id']
+            }
+            for r in all_results
+        ],
+        'total_time': total_time
     }
 
     with open(output_dir / "summary.json", 'w') as f:
         json.dump(summary, f, indent=2)
 
-    print(f"  Saved to: {output_dir}")
+    # Save circuit diagram for best run
+    try:
+        best_gammas = np.array(best_result['gammas'])
+        best_betas = np.array(best_result['betas'])
 
-    # Bitstring probability plot
-    plot_bitstring_probability(final_distribution, N_PARTICLES, ground_state, output_dir)
-    print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
+        qc = create_dicke_initial_state(n_qubits, N_PARTICLES)
+        for layer in range(P_VALUE):
+            apply_cost_layer(qc, best_gammas[layer], alpha, beta_matrix, n_qubits)
+            apply_xy_mixer_layer(qc, best_betas[layer], n_qubits, connectivity='full')
+        qc.measure_all()
+
+        save_circuit_diagram(qc, output_dir / "circuit_best_original.png")
+
+        qc_transpiled = transpile_for_hardware(qc, backend)
+        save_circuit_diagram(qc_transpiled, output_dir / "circuit_best_transpiled.png", fold=100)
+        print(f"  Saved circuit diagrams")
+    except Exception as e:
+        print(f"  Warning: Could not save circuit diagrams: {e}")
+
+    print(f"  Saved to: {output_dir}")
 
     print("\n" + "=" * 70)
     print("DONE")
