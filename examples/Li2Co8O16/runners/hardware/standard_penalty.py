@@ -137,7 +137,7 @@ def main():
     print("=" * 70)
 
     # Load coefficients
-    data_dir = example_root / "data"
+    data_dir = example_root / "data" / "input"
     alpha, beta_coeff, E_const = load_coefficients(str(data_dir))
 
     alpha = np.array(alpha).flatten()
