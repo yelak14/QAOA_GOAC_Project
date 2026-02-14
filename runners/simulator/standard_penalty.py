@@ -32,7 +32,7 @@ from qiskit.circuit import Parameter
 from qiskit_aer import AerSimulator
 from scipy.optimize import minimize
 
-from qaoa.hamiltonian import evaluate_energy, get_exact_solution
+from qaoa.hamiltonian import evaluate_energy
 from qaoa.utils import load_coefficients, is_valid_config
 from qaoa.circuits import (
     create_hadamard_initial_state, apply_cost_layer, apply_x_mixer_layer,
@@ -375,14 +375,6 @@ def main():
     print(f"Max iterations: {MAXITER}")
     print(f"Number of runs: {NUM_RUNS}")
 
-    # Get exact ground state
-    ground_state, ground_energy, all_energies = get_exact_solution(
-        alpha, beta_coeff, E_const, N_PARTICLES, n_qubits
-    )
-    print(f"\nGround state: {ground_state}")
-    print(f"Ground energy (original): {ground_energy:.4f} eV")
-    print(f"Number of valid configs: {len(all_energies)}")
-
     # Run QAOA
     all_results, alpha_transformed, beta_matrix_transformed, E_const_transformed = \
         run_qaoa_aer_cobyla_enhanced(
@@ -528,7 +520,7 @@ def main():
     print("=" * 70)
     best_run_idx = np.argmax([res['gs_prob_summed'] for res in all_results])
     best_distribution = all_results[best_run_idx]['final_distribution']
-    plot_bitstring_probability(best_distribution, N_PARTICLES, ground_state, output_dir)
+    plot_bitstring_probability(best_distribution, N_PARTICLES, output_path=output_dir)
     print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     # =========================================================================
@@ -678,7 +670,6 @@ def main():
     print("-" * 70)
     print(f"{'AVG':<6} {avg_valid*100:<12.2f} {avg_gs_prob:<18.4f}")
 
-    print(f"\nGround state energy (original): {ground_energy:.4f} eV")
     print(f"Number of valid configurations: {comb(n_qubits, N_PARTICLES)}")
 
     # Save summary JSON
@@ -693,8 +684,6 @@ def main():
             'maxiter': MAXITER,
             'num_runs': NUM_RUNS
         },
-        'ground_state': ground_state,
-        'ground_energy_original': float(ground_energy),
         'results': [
             {
                 'run': res['run_idx'] + 1,

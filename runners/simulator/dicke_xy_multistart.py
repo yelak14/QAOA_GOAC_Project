@@ -33,7 +33,7 @@ from qiskit.circuit import Parameter
 from qiskit_aer import AerSimulator
 from scipy.optimize import minimize
 
-from qaoa.hamiltonian import evaluate_energy, get_exact_solution
+from qaoa.hamiltonian import evaluate_energy
 from qaoa.utils import load_coefficients, is_valid_config
 from qaoa.circuits import (
     create_dicke_initial_state, apply_cost_layer, apply_xy_mixer_layer,
@@ -461,13 +461,6 @@ def main():
     n_valid = comb(n_qubits, N_PARTICLES)
     print(f"\nNumber of valid configurations: {n_valid}")
 
-    # Get exact ground state
-    ground_state, ground_energy, all_valid_energies = get_exact_solution(
-        alpha, beta_coeff, E_const, N_PARTICLES, n_qubits
-    )
-    print(f"Ground state: {ground_state}")
-    print(f"Ground energy: {ground_energy:.4f} eV")
-
     # Run multi-start QAOA
     results = run_multistart_qaoa(
         alpha, beta_coeff, E_const, N_PARTICLES, n_qubits, P_VALUE,
@@ -602,22 +595,18 @@ def main():
     colors = ['red' if i == results['best_stage1_idx'] else 'steelblue'
               for i in range(len(stage1_energies))]
     ax1.bar(range(1, len(stage1_energies) + 1), stage1_energies, color=colors, edgecolor='black')
-    ax1.axhline(y=ground_energy, color='green', linestyle='--', label=f'Ground E={ground_energy:.2f}')
     ax1.set_xlabel('Stage 1 Run', fontsize=11)
     ax1.set_ylabel('Final <H> (eV)', fontsize=11)
     ax1.set_title('Stage 1: Exploring Landscape (red = best)', fontsize=12)
-    ax1.legend()
     ax1.grid(True, alpha=0.3)
 
     # Top-right: Stage 2 convergence
     ax2 = axes[0, 1]
     ax2.plot(results['stage2_history']['iterations'], results['stage2_history']['energies'],
              'b-', linewidth=0.8)
-    ax2.axhline(y=ground_energy, color='green', linestyle='--', label=f'Ground E={ground_energy:.2f}')
     ax2.set_xlabel('Iteration', fontsize=11)
     ax2.set_ylabel('<H> (eV)', fontsize=11)
     ax2.set_title('Stage 2: Fine-tuning from Best', fontsize=12)
-    ax2.legend()
     ax2.grid(True, alpha=0.3)
 
     # Bottom-left: Combined convergence (Stage 1 + Stage 2)
@@ -625,7 +614,6 @@ def main():
     ax3.plot(range(stage1_end), best_stage1['history']['energies'], 'b-', linewidth=0.8, label='Stage 1')
     ax3.plot(range(stage1_end, len(combined_energies)), results['stage2_history']['energies'],
              'r-', linewidth=0.8, label='Stage 2')
-    ax3.axhline(y=ground_energy, color='green', linestyle='--', label=f'Ground E={ground_energy:.2f}')
     ax3.axvline(x=stage1_end, color='gray', linestyle=':', alpha=0.7)
     ax3.set_xlabel('Iteration', fontsize=11)
     ax3.set_ylabel('<H> (eV)', fontsize=11)
@@ -662,7 +650,7 @@ def main():
     print("\n" + "=" * 70)
     print("Generating bitstring probability plot...")
     print("=" * 70)
-    plot_bitstring_probability(results['final_distribution'], N_PARTICLES, ground_state, output_dir)
+    plot_bitstring_probability(results['final_distribution'], N_PARTICLES, output_path=output_dir)
     print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     # =========================================================================
@@ -762,9 +750,6 @@ def main():
     print(f"  GS prob (summed): {results['gs_prob_summed']:.4f}")
     print(f"  Total time: {results['total_time']:.1f}s")
 
-    print(f"\nGround state: {ground_state}")
-    print(f"Ground energy: {ground_energy:.4f} eV")
-
     # Save summary (convert numpy types to native Python types for JSON)
     summary = {
         'settings': {
@@ -776,8 +761,6 @@ def main():
             'stage1_maxiter': int(STAGE1_MAXITER),
             'stage2_maxiter': int(STAGE2_MAXITER)
         },
-        'ground_state': ground_state,
-        'ground_energy': float(ground_energy),
         'results': {
             'best_stage1_run': int(results['best_stage1_idx'] + 1),
             'best_stage1_energy': float(results['stage1_results'][results['best_stage1_idx']]['final_energy']),

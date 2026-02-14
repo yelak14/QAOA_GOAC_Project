@@ -29,7 +29,7 @@ from qiskit_ibm_runtime import QiskitRuntimeService, Session, SamplerV2 as Sampl
 from qiskit_ibm_runtime.options import SamplerOptions
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
-from qaoa.hamiltonian import evaluate_energy, get_exact_solution
+from qaoa.hamiltonian import evaluate_energy
 from qaoa.utils import load_coefficients, is_valid_config
 from qaoa.circuits import (
     create_dicke_initial_state, apply_cost_layer, apply_xy_mixer_layer,
@@ -209,13 +209,6 @@ def main():
     print(f"Multi-start: {NUM_STARTING_POINTS} starting points")
     print(f"Shots: {SHOTS}")
 
-    # Get exact ground state
-    ground_state, ground_energy, all_energies = get_exact_solution(
-        alpha, beta_coeff, E_const, N_PARTICLES, n_qubits
-    )
-    print(f"\nGround state: {ground_state}")
-    print(f"Ground energy: {ground_energy:.4f} eV")
-
     # Setup IBM Quantum
     print("\n" + "=" * 70)
     print("Setting up IBM Quantum connection...")
@@ -388,8 +381,6 @@ def main():
             'optimization_level': OPTIMIZATION_LEVEL,
             'resilience_level': RESILIENCE_LEVEL
         },
-        'ground_state': ground_state,
-        'ground_energy': float(ground_energy),
         'best_result': {
             'run': best_idx + 1,
             'energy': best_result['energy'],
@@ -432,7 +423,7 @@ def main():
         print(f"  Warning: Could not save circuit diagrams: {e}")
 
     # Bitstring probability plot
-    plot_bitstring_probability(final_distribution, N_PARTICLES, ground_state, output_dir)
+    plot_bitstring_probability(final_distribution, N_PARTICLES, output_path=output_dir)
     print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     print(f"  Saved to: {output_dir}")

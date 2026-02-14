@@ -32,7 +32,7 @@ from qiskit.circuit import Parameter
 from qiskit_aer import AerSimulator
 from scipy.optimize import minimize
 
-from qaoa.hamiltonian import evaluate_energy, get_exact_solution
+from qaoa.hamiltonian import evaluate_energy
 from qaoa.utils import load_coefficients, is_valid_config
 from qaoa.circuits import (
     create_dicke_initial_state, apply_cost_layer, apply_xy_mixer_layer,
@@ -372,13 +372,6 @@ def main():
     n_valid = comb(n_qubits, N_PARTICLES)
     print(f"\nNumber of valid configurations: {n_valid}")
 
-    # Get exact ground state
-    ground_state, ground_energy, all_valid_energies = get_exact_solution(
-        alpha, beta_coeff, E_const, N_PARTICLES, n_qubits
-    )
-    print(f"Ground state: {ground_state}")
-    print(f"Ground energy: {ground_energy:.4f} eV")
-
     # Run QAOA
     all_results, alpha_arr, beta_matrix = run_dicke_xy_qaoa(
         alpha, beta_coeff, E_const, N_PARTICLES, n_qubits, P_VALUE,
@@ -492,11 +485,9 @@ def main():
         # Left: Energy convergence
         ax_left = axes[row_idx][0]
         ax_left.plot(res['history']['iterations'], res['history']['energies'], 'b-', linewidth=0.5)
-        ax_left.axhline(y=ground_energy, color='r', linestyle='--', label=f'Ground E={ground_energy:.2f}')
         ax_left.set_xlabel('Iteration', fontsize=11)
         ax_left.set_ylabel('<H> (eV)', fontsize=11)
         ax_left.set_title(f'Run {row_idx + 1} - Energy Convergence', fontsize=12)
-        ax_left.legend()
         ax_left.grid(True, alpha=0.3)
 
         # Right: Expected N (should be exactly N_PARTICLES!)
@@ -524,7 +515,7 @@ def main():
 
     best_run_idx = np.argmax([res['gs_prob_summed'] for res in all_results])
     best_distribution = all_results[best_run_idx]['final_distribution']
-    plot_bitstring_probability(best_distribution, N_PARTICLES, ground_state, output_dir)
+    plot_bitstring_probability(best_distribution, N_PARTICLES, output_path=output_dir)
     print(f"  Saved: bitstring_probability.png, bitstring_probability.csv")
 
     # =========================================================================
@@ -620,7 +611,6 @@ def main():
         # Left: Energy convergence
         ax_left = axes[row_idx][0]
         ax_left.plot(res['history']['iterations'], res['history']['energies'], 'b-', linewidth=0.5)
-        ax_left.axhline(y=ground_energy, color='r', linestyle='--', alpha=0.7)
         ax_left.set_xlabel('Iteration', fontsize=11)
         ax_left.set_ylabel('<H> (eV)', fontsize=11)
         ax_left.set_title(f'Run {row_idx + 1}', fontsize=12)
@@ -670,8 +660,6 @@ def main():
     print("-" * 70)
     print(f"{'AVG':<6} {avg_valid*100:<12.2f} {avg_gs_prob:<18.4f} {avg_energy:<15.4f}")
 
-    print(f"\nGround state: {ground_state}")
-    print(f"Ground energy: {ground_energy:.4f} eV")
     print(f"Valid configurations: {n_valid}")
 
     # Save summary
@@ -687,8 +675,6 @@ def main():
             'maxiter': MAXITER,
             'num_runs': NUM_RUNS
         },
-        'ground_state': ground_state,
-        'ground_energy': float(ground_energy),
         'n_valid_configs': n_valid,
         'results': [
             {
