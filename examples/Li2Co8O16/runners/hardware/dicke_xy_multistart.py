@@ -21,7 +21,7 @@ import time
 
 # Add project root to path
 project_root = Path(__file__).resolve().parent.parent.parent.parent
-example_root = Path(__file__).resolve().parent.parent
+example_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from qiskit import QuantumCircuit, transpile

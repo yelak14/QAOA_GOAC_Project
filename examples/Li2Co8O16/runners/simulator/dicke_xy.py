@@ -28,8 +28,8 @@ import time
 project_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# Example root (2 levels up from runners/simulator/)
-example_root = Path(__file__).resolve().parent.parent
+# Example root (3 levels up from runners/simulator/)
+example_root = Path(__file__).resolve().parent.parent.parent
 
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit import Parameter
